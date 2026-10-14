@@ -1,0 +1,25 @@
+#!/bin/bash
+# Rebuild and redeploy LogVault services. This stack runs baked images with no
+# source bind-mount, so `docker restart` alone does NOT pick up code changes —
+# the image has to be rebuilt and the container recreated from it.
+#
+# Usage:
+#   ./deploy.sh                # rebuild + redeploy api, worker, web
+#   ./deploy.sh worker         # just the worker (e.g. after a worker/ change)
+#   ./deploy.sh api web        # any subset
+
+set -e
+
+cd "$(dirname "$0")"
+
+SERVICES="${*:-api worker web}"
+COMPOSE="docker compose -f docker-compose.yml -f docker-compose.prod.yml"
+
+echo "Building: $SERVICES"
+$COMPOSE build $SERVICES
+
+echo "Redeploying: $SERVICES"
+$COMPOSE up -d --no-deps $SERVICES
+
+echo "Done. Status:"
+docker ps --format "table {{.Names}}\t{{.Status}}" | grep -E "NAMES|$(echo "$SERVICES" | tr ' ' '|')"

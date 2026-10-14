@@ -1,0 +1,109 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+  LogVault theme — Google-style: light, airy, white surfaces, soft layered
+  shadows, chunky rounded cards, the Google blue/green/yellow/red palette used
+  semantically. Light is primary; a dark variant is kept.
+*/
+@layer base {
+  :root {
+    --radius: 0.875rem;
+
+    --background: 210 20% 98%;        /* #F8F9FA */
+    --foreground: 222 9% 14%;         /* #202124 */
+    --surface: 0 0% 100%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222 9% 14%;
+
+    --muted: 210 17% 95%;
+    --muted-foreground: 213 6% 39%;   /* #5F6368 */
+
+    --accent: 214 100% 96%;           /* light blue tint */
+    --accent-foreground: 217 79% 40%;
+
+    --border: 210 16% 90%;
+    --input: 210 16% 86%;
+    --ring: 217 89% 61%;
+
+    --primary: 217 89% 61%;           /* Google blue #4285F4 */
+    --primary-foreground: 0 0% 100%;
+
+    --success: 137 55% 36%;           /* Google green #34A853 */
+    --warning: 45 97% 50%;            /* Google yellow #FBBC04 */
+    --danger: 4 81% 56%;              /* Google red #EA4335 */
+    --info: 217 89% 61%;
+  }
+
+  .dark {
+    --background: 222 18% 10%;
+    --foreground: 210 17% 93%;
+    --surface: 222 16% 13%;
+
+    --card: 222 16% 13%;
+    --card-foreground: 210 17% 93%;
+
+    --muted: 220 14% 18%;
+    --muted-foreground: 215 12% 62%;
+
+    --accent: 217 40% 20%;
+    --accent-foreground: 214 95% 85%;
+
+    --border: 220 12% 22%;
+    --input: 220 12% 24%;
+    --ring: 217 89% 67%;
+
+    --primary: 217 89% 66%;
+    --primary-foreground: 222 18% 10%;
+
+    --success: 137 50% 48%;
+    --warning: 45 97% 56%;
+    --danger: 4 85% 64%;
+    --info: 217 89% 66%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+}
+
+@layer utilities {
+  /* Layered soft shadow — the "lifted card" / 3D feel. */
+  .shadow-card {
+    box-shadow:
+      0 1px 2px hsl(222 9% 14% / 0.06),
+      0 4px 12px hsl(222 9% 14% / 0.05);
+  }
+  .shadow-card-hover {
+    box-shadow:
+      0 2px 4px hsl(222 9% 14% / 0.08),
+      0 12px 28px hsl(222 9% 14% / 0.12);
+  }
+  /* Colored 3D icon circle: tinted fill + inner highlight + drop shadow. */
+  .icon-3d {
+    box-shadow:
+      inset 0 1px 1px hsl(0 0% 100% / 0.45),
+      0 4px 10px hsl(222 9% 14% / 0.18);
+  }
+
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--border));
+    border-radius: 9999px;
+  }
+}

@@ -1,0 +1,43 @@
+# Production overlay:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# The base file is a DEV stack: `web` runs `next dev`, which compiles each route
+# on first request and (with WATCHPACK_POLLING on a bind mount) polls the
+# filesystem forever, and `api` runs uvicorn --reload, which does the same. Any
+# amount of query tuning is invisible underneath that. This overlay serves the
+# compiled build instead.
+services:
+  api:
+    volumes: !override
+      - exports:/data/exports      # keeps exports, drops the ./api bind mount
+      - ${BACKUP_DIR:-./backups}:/backups:ro
+    command:
+      ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+    restart: unless-stopped
+
+  worker:
+    volumes: !override
+      - exports:/data/exports
+    restart: unless-stopped
+
+  web:
+    # Its own tag. Without this both stacks build to `last9_web_app-web`, so a
+    # prod build silently replaces the dev image and a later plain
+    # `docker compose up` runs `next dev` inside an image that has no `next`
+    # binary (exit 127, "next: not found").
+    image: last9_web_app-web:prod
+    build:
+      context: ./web
+      dockerfile: Dockerfile.prod
+      args:
+        # Next inlines NEXT_PUBLIC_* at build time, so it must be present here
+        # and not only at runtime.
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+    environment:
+      NODE_ENV: production
+    volumes: !reset []                 # drop the source bind mount + .next volume
+    command: ["node", "server.js"]
+    restart: unless-stopped
+
+volumes:
+  exports:

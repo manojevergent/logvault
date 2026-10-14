@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(py -3.11 -m black app/routers/templates.py tests/test_templates.py -q)",
+      "Bash(py -3.11 -m ruff check app/schemas.py app/routers/templates.py)",
+      "Bash(py -3.11 -m black --check app/schemas.py app/routers/templates.py tests/test_templates.py)",
+      "Bash(py -3.11 -m ruff check app/last9/aggregate.py app/runner.py tests/test_aggregate.py)",
+      "Bash(py -3.11 -m black --check app/last9/aggregate.py app/runner.py tests/test_aggregate.py)"
+    ]
+  }
+}

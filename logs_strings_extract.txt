@@ -1,0 +1,208 @@
+TVNZ - SG
+
+Search string: TVNZController searchAccountV2PostAction -- data comes from request
+
+Real log line:
+TVNZ-1-6aa7c225-607091a637308a0702f39193 - TVNZController searchAccountV2PostAction -- data comes from request:<SearchAccountV2RequestMessage><channelPartnerID>TVNZ_NZ</channelPartnerID>apiPassword="***REDACTED***"<email>Ew3233@yahoo.co.nz</email><apiUser>qpapiuser</apiUser></SearchAccountV2RequestMessage>
+
+
+Desired output: timestamp,spAccountID,channelPartnerID,bu_id,api_name
+
+-------------------------------------------------------------------------------------------------------------------
+
+ABSCBN - NV
+search string: ABSCBNController getContactPostAction -- data comes from request
+real log line: 
+ABSCBN-1-6aa7c34d-231d5d0b1f7ba4bf12f403bf - ABSCBNController getContactPostAction -- data comes from request:<GetContactRequestMessage><cpCustomerID>b9433c6d-f319-4b62-a54e-c5d13d13ae8e</cpCustomerID><channelPartnerID>ABSCBN</channelPartnerID>apiPassword="***REDACTED***"<apiUser>abscbnapiuser</apiUser><transactionId>txn-1789379405918386009</transactionId></GetContactRequestMessage>
+Desired output: timestamp,cpCustomerID,channelPartnerID,bu_id,api_name
+
+----------------------------------------------------------------------------------------------------------------
+
+ETV - Frankfurt 
+search string: getContactPostAction sessionToken taken from jwt
+Real log line:
+1-6aa7c2fe-499895ae08c09679571bdb2f - getContactPostAction sessionToken taken from jwt: 5Hl7-otgs-lEx0-6apQ-x41o-9wa9-AP and cpCustomerID: 24071819329273807
+
+Desired output: timestamp,apiname,jwt,cpCustomerID - Here api is getContactPostAction
+
+-------------------------------------------------------------------------------------------------------------------------------
+
+Search string: ETVController AND getEntitlementsPostAction sessionToken taken from jwt
+Real log line:
+
+ETVController--1-6aa7c460-5ff39bb30bbce674163a9d11 - getEntitlementsPostAction sessionToken taken from jwt: hXts-WnwT-HT8q-Vik7-jQ2b-nhZh-Yj and cpCustomerID: 23050203053761002
+
+Desired output: timestamp,apiname,jwt,cpCustomerID - Here api is getEntitlementsPostAction
+--------------------------------------------------------------------------------------------------------------------------------
+
+
+EPL - Frankfurt
+
+search string:EPLController eplCpAccountID from access token addSubscription API
+Real log line:
+EPL-vteq561789361696802 - EPLController eplCpAccountID from access token addSubscription API:50439166-9960-4ed4-ab18-3f30a28ca716
+
+
+Desired output: timestamp,apiname,cpCustomerID - Here api is AddSubscription and cpCustomerID is after API:
+-------------------------------------------------------------------------------------------------------------------------------
+
+search string: eplCpCustomerID from access token in removeSubscription API
+Real log line:
+EPL-2Cr7Pi1789376437983 - eplCpCustomerID from access token in removeSubscription API:37c6b509-281d-4ab2-a141-dbe9e73ae5d7
+
+Desired output: timestamp,apiname,cpCustomerID - Here API is removeSubscription and cpCustomerID is after API:
+
+---------------------------------------------------------------------------------------------------------------------------------
+
+search string: EPLController mergePartnerAccountsPostAction -- data comes from request
+Real Log line
+EPL-1-6aa7b30d-4e35f3771cddbd24306a219b - EPLController mergePartnerAccountsPostAction -- data comes from request:<MergePartnerAccountsReqMessage><firstName>Phil</firstName><lastName>Doyle</lastName><country>SG</country><mergeCPCustomerId>fbbba281-33b2-482e-914a-fcf9667f4ffd</mergeCPCustomerId><apiKey>92vki****</apiKey><dmaID>SG</dmaID><channelPartnerID>EPL</channelPartnerID><originalCPCustomerId>6826b639-fd06-4fa3-ae66-cadcee5fa4a8</originalCPCustomerId><email>*****</email></MergePartnerAccountsReqMessage>
+
+Desired output: timestamp,apiname,cpCustomerID,mergeCPCustomerId
+--------------------------------------------------------------------------------------------------------------------------------
+
+search string: eplCpCustomerID from access token in CreateUser API
+
+real log line:
+EPL-FMFTjp1789318741786 - eplCpCustomerID from access token in CreateUser API:6a719e24-798e-40ff-ba59-463d75ac0f15
+
+Desired output: timestamp,apiname,cpCustomerID
+
+------------------------------------------------------------------------------------------------------------------
+Football Association - Frankfurt
+
+Search string: FAController addSubscriptionPostAction -- data comes from request
+
+real log line:
+
+FA-1-6aa7c749-5f85f9bc0e7fdeb0141bba0d - In FAController addSubscriptionPostAction -- data comes from request :<AddSubscriptionRequestMessage><paymentmethodInfo><transactionReferenceMsg><txID>eyJhbGciOiJFUzI1NiIsIng1YyI6WyJNSUlFTVRDQ0E3YWdBd0lCQWdJUVI4S0h6ZG41NTRaL1VvcmFkTng5dHpBS0JnZ3Foa2pPUFFRREF6QjFNVVF3UWdZRFZRUURERHRCY0hCc1pTQlhiM0pzWkhkcFpHVWdSR1YyWld4dmNHVnlJRkpsYkdGMGFXOXVjeUJEWlhKMGFXWnBZMkYwYVc5dUlFRjFkR2h2Y21sMGVURUxNQWtHQTFVRUN3d0NSell4RXpBUkJnTlZCQW9NQ2tGd2NHeGxJRWx1WXk0eEN6QUpCZ05WQkFZVEFsVlRNQjRYRFRJMU1Ea3hPVEU1TkRRMU1Wb1hEVEkzTVRBeE16RTNORGN5TTFvd2daSXhRREErQmdOVkJBTU1OMUJ5YjJRZ1JVTkRJRTFoWXlCQmNIQWdVM1J2Y21VZ1lXNWtJR2xVZFc1bGN5QlRkRzl5WlNCU1pXTmxhWEIwSUZOcFoyNXBibWN4TERBcUJnTlZCQXNNSTBGd2NHeGxJRmR2Y214a2QybGtaU0JFWlhabGJHOXdaWElnVW1Wc1lYUnBiMjV6TVJNd0VRWURWUVFLREFwQmNIQnNaU0JKYm1NdU1Rc3dDUVlEVlFRR0V3SlZVekJaTUJNR0J5cUdTTTQ5QWdFR0NDcUdTTTQ5QXdFSEEwSUFCTm5WdmhjdjdpVCs3RXg1dEJNQmdyUXNwSHpJc1hSaTBZeGZlazdsdjh3RW1qL2JIaVd0TndKcWMyQm9IenNRaUVqUDdLRklJS2c0WTh5MC9ueW51QW1qZ2dJSU1JSUNCREFNQmdOVkhSTUJBZjhFQWpBQU1COEdBMVVkSXdRWU1CYUFGRDh2bENOUjAxREptaWc5N2JCODVjK2xrR0taTUhBR0NDc0dBUVVGQndFQkJHUXdZakF0QmdnckJnRUZCUWN3QW9ZaGFIUjBjRG92TDJObGNuUnpMbUZ3Y0d4bExtTnZiUzkzZDJSeVp6WXVaR1Z5TURFR0NDc0dBUVVGQnpBQmhpVm9kSFJ3T2k4dmIyTnpjQzVoY0hCc1pTNWpiMjB2YjJOemNEQXpMWGQzWkhKbk5qQXlNSUlCSGdZRFZSMGdCSUlCRlRDQ0FSRXdnZ0VOQmdvcWhraUc5Mk5rQlFZQk1JSCtNSUhEQmdnckJnRUZCUWNDQWpDQnRneUJzMUpsYkdsaGJtTmxJRzl1SUhSb2FYTWdZMlZ5ZEdsbWFXTmhkR1VnWW5rZ1lXNTVJSEJoY25SNUlHRnpjM1Z0WlhNZ1lXTmpaWEIwWVc1alpTQnZaaUIwYUdVZ2RHaGxiaUJoY0hCc2FXTmhZbXhsSUhOMFlXNWtZWEprSUhSbGNtMXpJR0Z1WkNCamIyNWthWFJwYjI1eklHOW1JSFZ6WlN3Z1kyVnlkR2xtYVdOaGRHVWdjRzlzYVdONUlHRnVaQ0JqWlhKMGFXWnBZMkYwYVc5dUlIQnlZV04wYVdObElITjBZWFJsYldWdWRITXVNRFlHQ0NzR0FRVUZCd0lCRmlwb2RIUndPaTh2ZDNkM0xtRndjR3hsTG1OdmJTOWpaWEowYVdacFkyRjBaV0YxZEdodmNtbDBlUzh3SFFZRFZSME9CQllFRklGaW9HNHdNTVZBMWt1OXpKbUdOUEFWbjNlcU1BNEdBMVVkRHdFQi93UUVBd0lIZ0RBUUJnb3Foa2lHOTJOa0Jnc0JCQUlGQURBS0JnZ3Foa2pPUFFRREF3TnBBREJtQWpFQStxWG5SRUM3aFhJV1ZMc0x4em5qUnBJelBmN1ZIejlWL0NUbTgrTEpsclFlcG5tY1B2R0xOY1g2WFBubGNnTEFBakVBNUlqTlpLZ2c1cFE3OWtuRjRJYlRYZEt2OHZ1dElETVhEbWpQVlQzZEd2RnRzR1J3WE95d1Iya1pDZFNyZmVvdCIsIk1JSURGakNDQXB5Z0F3SUJBZ0lVSXNHaFJ3cDBjMm52VTRZU3ljYWZQVGp6Yk5jd0NnWUlLb1pJemowRUF3TXdaekViTUJrR0ExVUVBd3dTUVhCd2JHVWdVbTl2ZENCRFFTQXRJRWN6TVNZd0pBWURWUVFMREIxQmNIQnNaU0JEWlhKMGFXWnBZMkYwYVc5dUlFRjFkR2h2Y21sMGVURVRNQkVHQTFVRUNnd0tRWEJ3YkdVZ1NXNWpMakVMTUFrR0ExVUVCaE1DVlZNd0hoY05NakV3TXpFM01qQXpOekV3V2hjTk16WXdNekU1TURBd01EQXdXakIxTVVRd1FnWURWUVFERER0QmNIQnNaU0JYYjNKc1pIZHBaR1VnUkdWMlpXeHZjR1Z5SUZKbGJHRjBhVzl1Y3lCRFpYSjBhV1pwWTJGMGFXOXVJRUYxZEdodmNtbDBlVEVMTUFrR0ExVUVDd3dDUnpZeEV6QVJCZ05WQkFvTUNrRndjR3hsSUVsdVl5NHhDekFKQmdOVkJBWVRBbFZUTUhZd0VBWUhLb1pJemowQ0FRWUZLNEVFQUNJRFlnQUVic1FLQzk0UHJsV21aWG5YZ3R4emRWSkw4VDBTR1luZ0RSR3BuZ24zTjZQVDhKTUViN0ZEaTRiQm1QaENuWjMvc3E2UEYvY0djS1hXc0w1dk90ZVJoeUo0NXgzQVNQN2NPQithYW85MGZjcHhTdi9FWkZibmlBYk5nWkdoSWhwSW80SDZNSUgzTUJJR0ExVWRFd0VCL3dRSU1BWUJBZjhDQVFBd0h3WURWUjBqQkJnd0ZvQVV1N0Rlb1ZnemlKcWtpcG5ldnIzcnI5ckxKS3N3UmdZSUt3WUJCUVVIQVFFRU9qQTRNRFlHQ0NzR0FRVUZCekFCaGlwb2RIUndPaTh2YjJOemNDNWhjSEJzWlM1amIyMHZiMk56Y0RBekxXRndjR3hsY205dmRHTmhaek13TndZRFZSMGZCREF3TGpBc29DcWdLSVltYUhSMGNEb3ZMMk55YkM1aGNIQnNaUzVqYjIwdllYQndiR1Z5YjI5MFkyRm5NeTVqY213d0hRWURWUjBPQkJZRUZEOHZsQ05SMDFESm1pZzk3YkI4NWMrbGtHS1pNQTRHQTFVZER3RUIvd1FFQXdJQkJqQVFCZ29xaGtpRzkyTmtCZ0lCQkFJRkFEQUtCZ2dxaGtqT1BRUURBd05vQURCbEFqQkFYaFNxNUl5S29nTUNQdHc0OTBCYUI2NzdDYUVHSlh1ZlFCL0VxWkdkNkNTamlDdE9udU1UYlhWWG14eGN4ZmtDTVFEVFNQeGFyWlh2TnJreFUzVGtVTUkzM3l6dkZWVlJUNHd4V0pDOTk0T3NkY1o0K1JHTnNZRHlSNWdtZHIwbkRHZz0iLCJNSUlDUXpDQ0FjbWdBd0lCQWdJSUxjWDhpTkxGUzVVd0NnWUlLb1pJemowRUF3TXdaekViTUJrR0ExVUVBd3dTUVhCd2JHVWdVbTl2ZENCRFFTQXRJRWN6TVNZd0pBWURWUVFMREIxQmNIQnNaU0JEWlhKMGFXWnBZMkYwYVc5dUlFRjFkR2h2Y21sMGVURVRNQkVHQTFVRUNnd0tRWEJ3YkdVZ1NXNWpMakVMTUFrR0ExVUVCaE1DVlZNd0hoY05NVFF3TkRNd01UZ3hPVEEyV2hjTk16a3dORE13TVRneE9UQTJXakJuTVJzd0dRWURWUVFEREJKQmNIQnNaU0JTYjI5MElFTkJJQzBnUnpNeEpqQWtCZ05WQkFzTUhVRndjR3hsSUVObGNuUnBabWxqWVhScGIyNGdRWFYwYUc5eWFYUjVNUk13RVFZRFZRUUtEQXBCY0hCc1pTQkpibU11TVFzd0NRWURWUVFHRXdKVlV6QjJNQkFHQnlxR1NNNDlBZ0VHQlN1QkJBQWlBMklBQkpqcEx6MUFjcVR0a3lKeWdSTWMzUkNWOGNXalRuSGNGQmJaRHVXbUJTcDNaSHRmVGpqVHV4eEV0WC8xSDdZeVlsM0o2WVJiVHpCUEVWb0EvVmhZREtYMUR5eE5CMGNUZGRxWGw1ZHZNVnp0SzUxN0lEdll1VlRaWHBta09sRUtNYU5DTUVBd0hRWURWUjBPQkJZRUZMdXczcUZZTTRpYXBJcVozcjY5NjYvYXl5U3JNQThHQTFVZEV3RUIvd1FGTUFNQkFmOHdEZ1lEVlIwUEFRSC9CQVFEQWdFR01Bb0dDQ3FHU000OUJBTURBMmdBTUdVQ01RQ0Q2Y0hFRmw0YVhUUVkyZTN2OUd3T0FFWkx1Tit5UmhIRkQvM21lb3locG12T3dnUFVuUFdUeG5TNGF0K3FJeFVDTUcxbWloREsxQTNVVDgyTlF6NjBpbU9sTTI3amJkb1h0MlFmeUZNbStZaGlkRGtMRjF2TFVhZ002QmdENTZLeUtBPT0iXX0.eyJ0cmFuc2FjdGlvbklkIjoiMjIwMDAzNDM4MjQ4NjEyIiwib3JpZ2luYWxUcmFuc2FjdGlvbklkIjoiMjIwMDAzNDM4MjQ4NjEyIiwid2ViT3JkZXJMaW5lSXRlbUlkIjoiMjIwMDAxNDc5Nzg3NzIxIiwiYnVuZGxlSWQiOiJjb20udGhlZmEuZmFuLmFwcCIsInByb2R1Y3RJZCI6ImNvbS50aGVmYS5mYW5hcHAuc3Vic2NyaXB0aW9ucy5lbmdsYW5kcGx1cyIsInN1YnNjcmlwdGlvbkdyb3VwSWRlbnRpZmllciI6IjIyMTMwOTM2IiwicHVyY2hhc2VEYXRlIjoxNzgzNDU0NjcwMDAwLCJvcmlnaW5hbFB1cmNoYXNlRGF0ZSI6MTc4MzQ1NDY3MDAwMCwiZXhwaXJlc0RhdGUiOjE4MTQ5OTA2NzAwMDAsInF1YW50aXR5IjoxLCJ0eXBlIjoiQXV0by1SZW5ld2FibGUgU3Vic2NyaXB0aW9uIiwiZGV2aWNlVmVyaWZpY2F0aW9uIjoiOG9VOHJkV21wZnk0VXhFN05iWHlNYm9pTHprUDRkL1R4NEVTcU8vQ3hEWTlsZ1F2ZndDTGxiQnpLc2xHdVVVYyIsImRldmljZVZlcmlmaWNhdGlvbk5vbmNlIjoiNDVlOWVlYmUtNTU2MC00NjczLWExZmQtZGMzYTA3ZGU1ZWFlIiwiYXBwQWNjb3VudFRva2VuIjoiMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDU2OTEwNTU2IiwiaW5BcHBPd25lcnNoaXBUeXBlIjoiUFVSQ0hBU0VEIiwic2lnbmVkRGF0ZSI6MTc4OTM4MDQyNDE0NSwiZW52aXJvbm1lbnQiOiJQcm9kdWN0aW9uIiwidHJhbnNhY3Rpb25SZWFzb24iOiJQVVJDSEFTRSIsInN0b3JlZnJvbnQiOiJHQlIiLCJzdG9yZWZyb250SWQiOiIxNDM0NDQiLCJwcmljZSI6MjAwMDAsImN1cnJlbmN5IjoiR0JQIiwiYXBwVHJhbnNhY3Rpb25JZCI6IjcwNTY4OTU1OTA2NDc4MDg5NiIsImJpbGxpbmdQbGFuVHlwZSI6IkJJTExFRF9VUEZST05UIn0.6iZ84AiMTBxwtlkwfQB58A8c6GKAvB4dP0N9RgX0mTC3tTdVhanjzdBtF4OwmKmS0T6W56u5P-3owp7cvH0g2Q</txID><version>v2</version></transactionReferenceMsg><label>App Store Billing</label></paymentmethodInfo><serviceType>PRODUCT</serviceType><firstName>Charlotte</firstName><lastName>Sharratt</lastName><appServiceID>com.thefa.fanapp.subscriptions.englandplus</appServiceID><spAccountID>56910556</spAccountID><apiKey>sHh5D****</apiKey><channelPartnerID>FA</channelPartnerID><email>*****</email></AddSubscriptionRequestMessage>
+
+
+Desired output: timestamp,apiname,spAccountID,channelPartnerID
+
+-------------------------------------------------------------------------------------------------------------------
+Liberty Global (LG) . eu-cental-1 (FF/IR) - Frankfurt
+
+Search string: In getPkgsAndProdsWithPromosV2 POST Method AND LibertyGlobalController
+Real log line:
+
+LibertyGlobalController--1-6aaa48f9-444efe2c7fab95c67a2a7576 -  In getPkgsAndProdsWithPromosV2 POST Method
+
+Desired output: timestamp,apiname,spAccountID
+
+
+-------------------------------------------------------------------------------------------------------------------
+
+
+EKKL - NV
+
+search string: ClassName CGetOAuthAccessTokenCommand SPAccountId AND Pinnacle
+Pinnacle-1-6aa7ddd5-0bbee77167d2977f315516d1 - ClassName CGetOAuthAccessTokenCommand SPAccountId 260911203519468485416299 in BU Ekkl API User EkklWebApiUser
+
+Desired output: timestamp,spAccountID,channelPartnerID,bu_id,api_name
+
+------------------------------------------------------------------------------------------------------------------
+
+MongolTV -NV
+
+search string: updateCartDetailsPostAction -- data comes from request:
+Real log line
+1-6aa7dd4a-2859fde66db096305787a493 - updateCartDetailsPostAction -- data comes from request:<CartDetailsRequestMessage><cpCustomerID>97de622b43616a0f7</cpCustomerID><apiKey>wel2u****</apiKey><channelPartnerID>ORI_AUS</channelPartnerID><canReturnUserToken>true</canReturnUserToken><CartItems><quantity>1</quantity><assetId>71046</assetId><ProdPackIndicator>0</ProdPackIndicator><sku>TVOD01_EVG_AUD</sku><title>МЭЛХИЙ ГҮНЖ</title><assetType>movies</assetType></CartItems></CartDetailsRequestMessage>
+
+Desired output: timestamp,spAccountID,channelPartnerID,bu_id,api_name
+
+----------------------------------------------------------------------------------------------------------------
+Shahid - NV
+
+Search string: ShahidController getActiveSubscriptionPostAction -- data comes from request
+Real log line:
+1-6aa7e6b0-025247885f7bc0425b7625f7 - ShahidController getActiveSubscriptionPostAction -- data comes from request:<GetActiveSubscriptionsRequestMessage><spAccountID>e9e9dbdc05fb47a99f93099f045c9e8c</spAccountID><apiKey>ga9me****</apiKey><channelPartnerID>SHAHID</channelPartnerID><returnFreezeSubscriptions>true</returnFreezeSubscriptions></GetActiveSubscriptionsRequestMessage>
+
+Desired output: timestamp,spAccountID,channelPartnerID,bu_id,api_name
+
+-------------------------------------------------------------------------------------------------------------------
+VIKI - NV
+
+search string: getProductsPostAction -- data comes from request AND VIKI-1
+Real log line:
+VIKI-1-6aa7e734-71feb1ec50c4f5bd7af3af85 - getProductsPostAction -- data comes from request : <GetProductsRequestMessage><returnAttributes>T</returnAttributes><isSupportedLanguage>true</isSupportedLanguage><spAccountID>119272676u</spAccountID><dmaID>DE</dmaID><appChannels><appChannel>App Store Billing</appChannel></appChannels>apiPassword="***REDACTED***"<returnAppChannels>T</returnAppChannels><salesChannel>iOS</salesChannel><apiUser>EVVIKIAPIPRODUSER</apiUser><returnFreeTrial>F</returnFreeTrial><rateType>App Store Billing</rateType><isSingleSubscription>true</isSingleSubscription><channelPartnerID>VIKI</channelPartnerID><returnPromotions>T</returnPromotions></GetProductsRequestMessage> 
+
+Desired output: timestamp,spAccountID,channelPartnerID,bu_id,api_name
+
+---------------------------------------------------------------------------------------------------------------
+ABSCBN - NV
+
+Search string:ABSCBNController getContactPostAction -- data comes from request
+
+ABSCBN-1-6aa7ea9f-7f7d32687cf4e0444b81b653 - ABSCBNController getContactPostAction -- data comes from request:<GetContactRequestMessage><cpCustomerID>39646d38-1717-4de5-85e5-6e544d2c4f8a</cpCustomerID><channelPartnerID>ABSCBN</channelPartnerID>apiPassword="***REDACTED***"<apiUser>abscbnapiuser</apiUser><transactionId>txn-1789389471660281615</transactionId></GetContactRequestMessage>
+
+Desired output: timestamp,cpCustomerID,channelPartnerID,bu_id,api_name
+
+
+
+----------------------------------------------------------------------------------------------------------------
+Singapore
+AstroSooka - SG
+
+Search string: getActiveSubscriptionsPostAction sessionToken taken from jwt AND ASTROSOTT
+Real log line:
+ASTROSOTT-1-6aa7ebbc-0445106471c5525b760131c2 - getActiveSubscriptionsPostAction sessionToken taken from jwt: GoyI-WbSS-ZnuN-3kyM-j7li-KOq2-HB and cpCustomerID: e3b33867-9c32-48c5-b73b-59d022a48daf
+
+Desired output: timestamp,cpCustomerID,channelPartnerID,bu_id,api_name
+
+---------------------------------------------------------------------------------------------------------
+
+Search string : ASTROSOTTController refreshTokenPostAction -- data comes from request
+Real log line:
+ASTROSOTT-1-6aa7ecf3-15c2adad2ef8247960dd3c70 - ASTROSOTTController refreshTokenPostAction -- data comes from request : <RefreshTokenRequestMessage><apiKey>uesap****</apiKey><channelPartnerID>ASTRO</channelPartnerID><refreshToken>xapG-jlEu-B2DJ-qjPx-M6kK-p5n1-ra</refreshToken></RefreshTokenRequestMessage>
+
+Desired output: timestamp,refreshToken,channelPartnerID,bu_id,api_name
+------------------------------------------------------------------------------------------------------------------------
+
+Search string: ClassName  PayTVAccountDetailsCommand SPAccountId AND ASTRO-PAYTV
+
+Real log line:
+ASTRO-PAYTV-1-6aaa52e8-7e24eb2513ccae9c4f520999 - ClassName  PayTVAccountDetailsCommand SPAccountId  60304053 in BU  Astro Parent API User astrocuesapiuser
+
+Desired output: timestamp,SPAccountId,channelPartnerID,bu_id,api_name
+
+-------------------------------------------------------------------------------------------------------------------------
+
+TVNZ - SG
+Search string: TVNZController searchAccountV2PostAction -- data comes from
+Real log line:
+TVNZ-1-6aa7f96a-503cf80245d8b3a62b4bfec5 - TVNZController searchAccountV2PostAction -- data comes from request:<SearchAccountV2RequestMessage><channelPartnerID>TVNZ_NZ</channelPartnerID>apiPassword="***REDACTED***"<email>tracey.v1982@gmail.com</email><apiUser>qpapiuser</apiUser></SearchAccountV2RequestMessage>
+
+Desired output: timestamp,spAccountID,channelPartnerID,bu_id,api_name
+-------------------------------------------------------------------------------------------------------------------------------
+Search string: TVNZController searchAccountV2PostAction -- data comes from 
+Real log line:
+TVNZ-1-6aa7f9aa-120cccce0ec63e105b231b87 - TVNZController getProductsPostAction -- data comes from request : <GetProductsRequestMessage><returnAttributes>T</returnAttributes><returnLocaleDisplayName>T</returnLocaleDisplayName><dmaID>001</dmaID><channelPartnerID>TVNZ_NZ</channelPartnerID>apiPassword="***REDACTED***"<returnAppChannels>T</returnAppChannels><returnPromotions>T</returnPromotions><apiUser>qpapiuser</apiUser></GetProductsRequestMessage>
+
+Desired output: timestamp,spAccountID,channelPartnerID,bu_id,api_name
+
+--------------------------------------------------------------------------------------------------------------------------------
+
+Search string: TVNZController getProductsPostAction -- data comes from request
+Real log line:
+TVNZ-1-6aa7f9ab-2d4fc821454947c534b0e15a - TVNZController getProductsPostAction -- data comes from request : <GetProductsRequestMessage><returnAttributes>T</returnAttributes><returnLocaleDisplayName>T</returnLocaleDisplayName><AccessToken>eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJkZXZpY2VUeXBlIjoiQW5kcm9pZCBUdiIsInN1YiI6ImVDWmpWdjhpV1IxVFV6VWQ1YiIsImxvYyI6Ik5aIiwidnN0YXR1cyI6dHJ1ZSwibG9naW5UeXBlIjoibW9iaWxlTnVtYmVyIiwiaXNzIjoiZXYiLCJtb2RlbE5vIjoiU1YxMSIsImNwIjoiVFZOWl9OWiIsImRldmljZU5hbWUiOiJJQ04iLCJzaWQiOiJlQ1pqVnY4aVdSMVRVelVkNWIiLCJzZXJpYWxObyI6Ijc1MWUzZWRhYzU4MDljMjciLCJ1aWQiOiJlQ1pqVnY4aVdSMVRVelVkNWIiLCJhdWQiOiJUVk5aIiwibmJmIjoxNzg4OTY1NDM3LCJleHAiOjE3ODk1NzAyNDIsImlhdCI6MTc4ODk2NTQ0MiwianRpIjoib3I1Zy1vajVWLU5wNUEtRUVZNS1UeU82LTZFS2otamIiLCJjaWQiOiIzNDA3NDg4In0.XOkOPxCUvGjLkJjHk8KM7T3NUHsDL25Qv8RfPFSPA9x64k6pUg33YhmdODPDpIg2CkLMm15i-02IJD_kpgAxO09cHE3Hjr6dfXkiMdrMYFhcsQVu6AyUxbf2TAl3G2MEExjoUXzwo3h-5H8KeiHqUYdpGRonylkw2p2zqWQBQM3alxjtm3uht_LN7FjRRkeK1_qqliIcWV-1FJ_hPEFd3yfwGe7HB-EF9Kdzyh2rj-SZs4rMaoMfveMN3RAKUB8HzM-WRznSz8CPpWe69ebYI85PQ6dI9hZmROopfuipjAd_2MBD6KKh19RRGFWnQ69KoCXIlHOuE4Ra5r3g_fv__nPJUOCXswgJtNkojTfUJNwFVFLGSHE4taHAAcUCSQespXY_q-BR2vNFmUdF7vFCLYHC1ERvmC8xVQ2dVX82yue3WoM9WNNgrEvAdUituulP0Fqqu9XiqV3E3NL9tdHJBCrgY79-kIUq2xpEzNcZBT5rzdQZYIz3f6DTOMT9gmq9XtmNuje_1BTX7M4gDXoCKJm7FjmEZvm18qNn0mvr4oegMN1rXWB8UTGyBdvrtoCCaPOP9s852usGSPOECkhd7eRjTBCrCV2McQvqUqfbrCpBXe8kueU1-XUm8nMyU_l700oQDvjXXwooZaigJrD24ymzyCKUnOTeyJxbLi4rQ-s</AccessToken><dmaID>001</dmaID><channelPartnerID>TVNZ_NZ</channelPartnerID><returnAppChannels>T</returnAppChannels><returnPromotions>T</returnPromotions>apiPassword="***REDACTED***"<apiUser>qpapiuser</apiUser></GetProductsRequestMessage>
+
+Desired output: timestamp,spAccountID,channelPartnerID,bu_id,api_name
+---------------------------------------------------------------------------------------------------------------------------------
+
+
+Search string : ClassName  CGetEntitlementsCommand SPAccountId AND TVNZ
+Real log line
+TVNZ-1-6aa7f9aa-289645346870b2514129a6e3 - ClassName  CGetEntitlementsCommand SPAccountId  AMJRBxZEmQpiqZHgGM in BU  TVNZ NEWZEALAND API User qpapiuser
+
+Desired output: timestamp,spAccountID,channelPartnerID,bu_id,api_name
+---------------------------------------------------------------------------------------------------------------------------------
+Search string:ClassName  CGetContactTermsConditionsCommand SPAccountId
+Real log line:
+TVNZ-1-6aa7fc03-1eaeacff351ce080520ac1d7 - ClassName  CGetContactTermsConditionsCommand SPAccountId  2603280558563135473 in BU  TVNZ NEWZEALAND API User nocapiuser
+Desired output: timestamp,spAccountID,channelPartnerID,bu_id,api_name
+---------------------------------------------------------------------------------------------------------------------------------
+Search string: ClassName CRefreshTokenCommand SPAccountId AND TVNZ
+Real log line:
+TVNZ-1-6aa7ff1c-40e6c4c1180a2e225914254e - ClassName CRefreshTokenCommand SPAccountId FbgYZO1lNw1v6dDckJ in BU TVNZ NEWZEALAND API User qpapiuser This is combination of of log string ClassName CGetAccountContactsCommand SPAccountId and TVNZ-1
+Desired output: timestamp,spAccountID,channelPartnerID,bu_id,api_name

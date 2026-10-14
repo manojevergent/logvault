@@ -1,0 +1,140 @@
+# LogVault — local development stack.
+# `docker compose up` brings up postgres + redis + api + worker + web.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-logvault}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-in-production}
+      POSTGRES_DB: ${POSTGRES_DB:-logvault}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-logvault} -d ${POSTGRES_DB:-logvault}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6380:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      # Override compose-internal hostnames regardless of .env values
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-logvault}:${POSTGRES_PASSWORD:-change-me-in-production}@postgres:5432/${POSTGRES_DB:-logvault}
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./api:/app
+      - exports:/data/exports
+      - ${BACKUP_DIR:-./backups}:/backups:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-logvault}:${POSTGRES_PASSWORD:-change-me-in-production}@postgres:5432/${POSTGRES_DB:-logvault}
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./worker:/app
+      - exports:/data/exports
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # -B embeds the beat scheduler (F1 schedules, F4 retention). For multi-worker
+    # prod, drop -B here and run one dedicated `celery beat` process instead.
+    command: ["celery", "-A", "app.celery_app.celery", "worker", "-B", "--loglevel=INFO", "--concurrency=4"]
+
+  # Nightly pg_dump. Everything the platform knows lives in one volume:
+  # credentials (encrypted refresh tokens included), index targets, schedules,
+  # filter templates and the whole job history. There was no copy of any of it.
+  #
+  # ponytail: a shell loop in the official postgres image, not a backup product
+  # and not a Celery task. pg_dump here matches the server version exactly, which
+  # a client apt-installed into the worker image would not (bookworm ships 15,
+  # the server is 16, and pg_dump refuses to dump a newer server).
+  backup:
+    image: postgres:16-alpine
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-logvault}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-change-me-in-production}
+      PGDATABASE: ${POSTGRES_DB:-logvault}
+    volumes:
+      # A host bind mount, NOT a named volume. The realistic way this data dies
+      # is `docker compose down -v`, which takes every named volume with it —
+      # a backup stored in one would be deleted by the same command.
+      - ${BACKUP_DIR:-./backups}:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    # Dumps immediately on start, then daily. -Fc is the custom format, restored
+    # with pg_restore (see RUNBOOK.md). Retention is 14 days.
+    command: >
+      sh -c 'mkdir -p /backups;
+      while true; do
+        pg_dump -Fc -f "/backups/logvault-$$(date +%Y%m%d-%H%M%S).dump" &&
+        find /backups -name "logvault-*.dump" -mtime +14 -delete;
+        sleep 86400;
+      done'
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+      # Windows bind mounts don't deliver inotify events to the Linux container,
+      # so webpack's dev-mode watcher never sees host-side file edits without this.
+      WATCHPACK_POLLING: "true"
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./web:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      - api
+    command: ["npm", "run", "dev"]
+
+volumes:
+  pgdata:
+  redisdata:
+  exports:

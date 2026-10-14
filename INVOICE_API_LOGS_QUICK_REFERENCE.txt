@@ -1,0 +1,131 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                   INVOICE API LOGS - QUICK REFERENCE CARD                   ║
+║                         Last9 Regional Extraction Guide                      ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ 🌍 REGIONAL CONFIGURATION                                                    │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                               │
+│  🇺🇸 NORTH VIRGINIA (us-east-1)                                             │
+│     Slug: evergentuse1                                                       │
+│     Index: UMServices                                                        │
+│     Customers: 9 tracked + 10 not tracked = 19 total                        │
+│                                                                               │
+│  🇪🇺 FRANKFURT / IRELAND (eu-central-1)                                     │
+│     Slug: evergenteuc1                                                       │
+│     Index: UMServices                                                        │
+│     Customers: 6 tracked + 2 not tracked = 8 total                          │
+│                                                                               │
+│  🇸🇬 SINGAPORE (ap-southeast-1)                                             │
+│     Slug: evergentapse1                                                      │
+│     Index: UMServices                                                        │
+│     Customers: 11 tracked + 0 not tracked = 11 total                        │
+│                                                                               │
+│  🇮🇳 INDIA (ap-south-1)                                                     │
+│     Slug: (pre-configured)                                                   │
+│     Index: UMServices                                                        │
+│     Customers: 1 tracked + 2 not tracked = 3 total                          │
+│                                                                               │
+│  TOTAL: 27 Tracked | 14 Not Tracked | 41 Customers                          │
+│                                                                               │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ 🎯 TRACKED CUSTOMERS BY REGION                                              │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                               │
+│  NV (6): ANTENNA, EKKL, MINNO, MONGOLTV, SHAHID, VIKI                      │
+│  IR (4): ETV, EPL, FOOTBALL_ASSOCIATION, LIBERTY_GLOBAL                    │
+│  SG (7): ABSCBN, ASTRO_SOOKA, ASTRO_NJOI, LIGHTBOX, ONE31, PILIPINAS       │
+│          TELEKOM_MALAYSIA                                                    │
+│  IN (1): AHA                                                                 │
+│  SPECIAL (2): TV_ASAHI, TVNZ                                                │
+│                                                                               │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ⚠️  CUSTOMERS REQUIRING AND COMBINATION (8 total)                            │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                               │
+│  ANTENNA • EKKL • MINNO • VIKI • PILIPINAS • TELEKOM_MALAYSIA               │
+│  LIBERTY_GLOBAL • TVNZ                                                       │
+│                                                                               │
+│  ⚠️  CRITICAL: Omitting AND combinations produces INCORRECT counts!         │
+│                                                                               │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ 📋 DOCUMENTATION FILES                                                       │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                               │
+│  1. LOGVAULT_JOB_SETUP_GUIDE.md              👈 START HERE                  │
+│     Implementation guide with JSON examples, credential setup, troubleshooting
+│                                                                               │
+│  2. INVOICE_API_LOGS_CONFIG.json             For API/IaC integration        │
+│     Machine-readable config for programmatic job creation                   │
+│                                                                               │
+│  3. INVOICE_API_LOGS_SUMMARY.csv             For spreadsheets               │
+│     Quick-reference table with all 41 customers, sortable                   │
+│                                                                               │
+│  4. INVOICE_API_LOGS_COMPLETE_MAPPING.md     Full reference                │
+│     Comprehensive guide with Kibana links, samples, details                 │
+│                                                                               │
+│  5. INVOICE_API_LOGS_README.md               Overview                       │
+│     Navigation guide and quick start paths                                   │
+│                                                                               │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ 🚀 QUICK START PATHS                                                         │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                               │
+│  A) Manual UI Setup       → LOGVAULT_JOB_SETUP_GUIDE.md      (~2 hours)    │
+│  B) API-Driven Setup      → INVOICE_API_LOGS_CONFIG.json     (~30 min)     │
+│  C) Terraform/IaC         → INVOICE_API_LOGS_CONFIG.json     (~1 hour)     │
+│                                                                               │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ 🔐 CREDENTIALS AT A GLANCE                                                   │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                               │
+│  Region  │ Slug              │ Region Code      │ Index                    │
+│  ─────────┼───────────────────┼──────────────────┼──────────────────────    │
+│  NV      │ evergentuse1      │ us-east-1        │ UMServices               │
+│  IR      │ evergenteuc1      │ eu-central-1     │ UMServices               │
+│  SG      │ evergentapse1     │ ap-southeast-1   │ UMServices               │
+│  IN      │ (pre-configured)  │ ap-south-1       │ UMServices               │
+│                                                                               │
+│  ⚠️  All tokens valid until 2026. Plan regeneration early.                  │
+│                                                                               │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ 📅 EXTRACTION SCHEDULE RECOMMENDATION                                        │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                               │
+│  Frequency:    Daily (24-hour rolling windows)                               │
+│  Timezone:     UTC                                                           │
+│  Time:         00:00 UTC (midnight)                                          │
+│  Batch Mode:   Group by customer per 24-hour window                          │
+│  Retention:    30+ days (for monthly reconciliation)                         │
+│                                                                               │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ 🆕 RECENT CHANGES (2025-2026)                                                │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                               │
+│  Nov 24, 2025  →  AHA (IN): Old rules disabled, new rule required           │
+│  Jul 15, 2026  →  ABSCBN (SG): Parsing rule updated by Dev Team             │
+│  Jul 17, 2026  →  SHAHID (NV): Parsing rule updated by Dev Team             │
+│                                                                               │
+│  Check INVOICE_API_LOGS_SUMMARY.csv for "Last Updated" column               │
+│                                                                               │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  Created: 2026-09-14 | 4 Regions | 27 Tracked Customers | 8 AND Combos    ║
+║  👉 Begin with: LOGVAULT_JOB_SETUP_GUIDE.md                                 ║
+╚══════════════════════════════════════════════════════════════════════════════╝

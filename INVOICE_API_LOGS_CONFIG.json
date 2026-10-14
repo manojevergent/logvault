@@ -1,0 +1,361 @@
+{
+  "metadata": {
+    "version": "1.0",
+    "created": "2026-09-14",
+    "description": "Invoice API Logs extraction configuration for all regions and customers",
+    "total_customers": 41,
+    "tracked_customers": 27,
+    "untracked_customers": 14
+  },
+  "regions": {
+    "NV": {
+      "name": "North Virginia",
+      "region_code": "us-east-1",
+      "slug": "evergentuse1",
+      "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJsYXN0OS5pbyIsImF1ZCI6WyJhcHAubGFzdDkuaW8iXSwiZXhwIjoxODUyNTM2NTY5LCJuYmYiOjE3ODkzNzgxNjksImlhdCI6MTc4OTM3ODE2OSwianRpIjoiZDQ1ODU3NzktN2UxNy00OTI5LWJmZjYtZTUwZDg1ZGU0Zjg1Iiwic2NvcGVzIjpbInJlYWQiXSwia2luZCI6InJlZnJlc2hfdG9rZW4iLCJlbWFpbCI6Im1hbm9qQGV2ZXJnZW50LmNvbSIsIm9yZ2FuaXphdGlvbl9zbHVnIjoiZXZlcmdlbnR1c2UxIiwidG9rZW5faWQiOiIwNTdlNjhmNy03MmFmLTRiNDgtYWUyNS05MzIyMmRiNTI4NDcifQ.tG-Qy7lEhKw5RvSy2NwL0HJdbn5Qx2rgWIZ2zrkhBQs",
+      "physical_index": "UMServices",
+      "kibana_base": "https://nv-kibana.evergent.com",
+      "customers": 19
+    },
+    "IR": {
+      "name": "Frankfurt / Ireland",
+      "region_code": "eu-central-1",
+      "slug": "evergenteuc1",
+      "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJsYXN0OS5pbyIsImF1ZCI6WyJhcHAubGFzdDkuaW8iXSwiZXhwIjoxODUyNTM2NzY4LCJuYmYiOjE3ODkzNzgzNjgsImlhdCI6MTc4OTM3ODM2OCwianRpIjoiMDA5ZTQwNzItZDJhMy00ZDNmLWIxMzQtMDQ1OTUzNzgyNjA5Iiwic2NvcGVzIjpbInJlYWQiXSwia2luZCI6InJlZnJlc2hfdG9rZW4iLCJlbWFpbCI6Im1hbm9qQGV2ZXJnZW50LmNvbSIsIm9yZ2FuaXphdGlvbl9zbHVnIjoiZXZlcmdlbnRldWMxIiwidG9rZW5faWQiOiI2YTM3ZmNlMy1hODNiLTRjNDQtOGQ2Yi0xMjBjMjYyZmIyNjYifQ.Zya5QWm9f_S939YAEm_YYC0mnt0oiLVjqv0hptTOKlA",
+      "physical_index": "UMServices",
+      "kibana_base": "https://ir-kibana.evergent.com",
+      "customers": 8
+    },
+    "SG": {
+      "name": "Singapore",
+      "region_code": "ap-southeast-1",
+      "slug": "evergentapse1",
+      "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJsYXN0OS5pbyIsImF1ZCI6WyJhcHAubGFzdDkuaW8iXSwiZXhwIjoxODUyNTM2ODk5LCJuYmYiOjE3ODkzNzg0OTksImlhdCI6MTc4OTM3ODQ5OSwianRpIjoiMzk5M2MzMjYtODA3MS00ZWI4LWE1NTUtYjc4M2ZlNmNlZjA4Iiwic2NvcGVzIjpbInJlYWQiXSwia2luZCI6InJlZnJlc2hfdG9rZW4iLCJlbWFpbCI6Im1hbm9qQGV2ZXJnZW50LmNvbSIsIm9yZ2FuaXphdGlvbl9zbHVnIjoiZXZlcmdlbnRhcHNlMSIsInRva2VuX2lkIjoiMjE4ZGJjYzAtM2NhYy00YWMzLTkwY2YtNjhiOWJhMmY5MDI2In0.C6bk5Cq_ljp-5ZppxrEGt6psv8cBWSXW8PhSnwJtSRA",
+      "physical_index": "UMServices",
+      "kibana_base": "https://sg-kibana.evergent.com",
+      "customers": 11
+    },
+    "IN": {
+      "name": "Mumbai / India",
+      "region_code": "ap-south-1",
+      "slug": "evergent-pre-configured",
+      "refresh_token": "pre-configured",
+      "physical_index": "UMServices",
+      "kibana_base": "https://in-kibana.evergent.com",
+      "customers": 3
+    }
+  },
+  "customers": {
+    "NV": {
+      "ANTENNA": {
+        "track": true,
+        "schedule": "daily",
+        "rules": [
+          "EVBrightcoveController createUser -- response: AND message:SUCCESS",
+          "EVBrightcoveController addSubscription -- response: AND message:SUCCESS",
+          "EVBrightcoveController changeServicePostAction -- response AND status:SUCCESS",
+          "EVBrightcoveController updatePaymentInfo -- response: AND message:SUCCESS",
+          "EVBrightcoveController removeSubscriptionPostAction -- data comes from request:"
+        ],
+        "requires_and_combination": true
+      },
+      "EKKL": {
+        "track": true,
+        "schedule": "daily",
+        "rules": [
+          "ClassName CGetOAuthAccessTokenCommand SPAccountId AND Ekkl",
+          "ClassName CGetCustomerServicesCommand SPAccountId AND Ekkl"
+        ],
+        "requires_and_combination": true
+      },
+      "MINNO": {
+        "track": true,
+        "schedule": "daily",
+        "rules": [
+          "ClassName GetOAuthAccessTokenV2Command SPAccountId AND Minno",
+          "ClassName CGetCustomerServicesCommand SPAccountId AND Minno"
+        ],
+        "requires_and_combination": true
+      },
+      "MONGOLTV": {
+        "track": true,
+        "schedule": "daily",
+        "rules": [
+          "updateCartDetailsPostAction -- data comes from request:",
+          "removeSubscriptionPostAction -- data comes from request:"
+        ],
+        "requires_and_combination": false
+      },
+      "SHAHID": {
+        "track": true,
+        "schedule": "daily",
+        "rules": [
+          "ShahidController getActiveSubscriptionPostAction -- data comes from request:"
+        ],
+        "old_rules": [
+          "ShahidController getOAuthAccessTokenv2PostAction -- data comes from request:"
+        ],
+        "requires_and_combination": false,
+        "note": "Updated July 17th, 2026 by Dev Team"
+      },
+      "VIKI": {
+        "track": true,
+        "schedule": "daily",
+        "rules": [
+          "getProductsPostAction -- data comes from request : AND VIKI-1"
+        ],
+        "requires_and_combination": true,
+        "note": "Requires AND combination for accurate count"
+      },
+      "ATT_DTV": {
+        "track": false
+      },
+      "ANTEL": {
+        "track": false
+      },
+      "BRITBOX": {
+        "track": false
+      },
+      "FOXUSA": {
+        "track": false
+      },
+      "FANDUEL_SINCLAIR": {
+        "track": false,
+        "available_rules": [
+          "In BallySports getActiveSubscriptionsAPI for cpCustomerID",
+          "In BallySports getEntitlementsAPI for cpCustomerID"
+        ]
+      },
+      "GOTHAM": {
+        "track": false,
+        "available_rules": [
+          "ClassName GetCustomerServicesCommand SPAccountId AND Gotham",
+          "ClassName GetOAuthAccessTokenV2Command SPAccountId AND Gotham",
+          "ClassName GetEntitlementsCommand SPAccountId AND Gotham"
+        ]
+      },
+      "MARQUEE": {
+        "track": false
+      },
+      "NBA": {
+        "track": false
+      },
+      "SIMPLETV": {
+        "track": false
+      },
+      "SIMPLETV_FTTH": {
+        "track": false
+      },
+      "WNBA": {
+        "track": false
+      },
+      "EVERPASS": {
+        "track": false
+      }
+    },
+    "IR": {
+      "ETV": {
+        "track": true,
+        "schedule": "daily",
+        "rules": [
+          "getContactPostAction sessionToken taken from jwt:",
+          "getEntitlementsPostAction sessionToken taken from jwt:"
+        ],
+        "requires_and_combination": false
+      },
+      "EPL": {
+        "track": true,
+        "schedule": "daily",
+        "rules": [
+          "eplCpAccountID from access token in createUser API:",
+          "EPLController eplCpAccountID from access token addSubscription API:",
+          "eplCpCustomerID from access token in removeSubscription API:",
+          "EPLController activateUserPostAction -- data comes from request:",
+          "EPLController mergePartnerAccountsPostAction -- data comes from request:",
+          "eplCpCustomerID from access token in anonymizeAccount API:",
+          "eplCpCustomerID from access token in CreateUser API:"
+        ],
+        "requires_and_combination": false
+      },
+      "FOOTBALL_ASSOCIATION": {
+        "track": true,
+        "schedule": "daily",
+        "rules": [
+          "In FAController addSubscriptionPostAction -- data comes from request :"
+        ],
+        "requires_and_combination": false
+      },
+      "LIBERTY_GLOBAL": {
+        "track": true,
+        "schedule": "daily",
+        "rules": [
+          "LibertyGlobalController-- AND In getPkgsAndProdsWithPromosV2 POST Method",
+          "LibertyGlobalController-- AND In getActiveSubscriptionPostAction POST Method"
+        ],
+        "requires_and_combination": true
+      },
+      "DORNA": {
+        "track": false
+      },
+      "EXXEN": {
+        "track": false
+      },
+      "TRT_WORLD": {
+        "track": false
+      },
+      "TV3": {
+        "track": false
+      }
+    },
+    "SG": {
+      "ABSCBN": {
+        "track": true,
+        "schedule": "daily",
+        "rules": [
+          "ABSCBNController getContactPostAction -- data comes from request"
+        ],
+        "old_rules": [
+          "ABSCBN getContactPostAction channelPartnerID taken from jwt: ABSCBN-AU and cpCustomerID"
+        ],
+        "requires_and_combination": false,
+        "note": "Updated July 15th, 2026 by Dev Team"
+      },
+      "ASTRO_SOOKA": {
+        "track": true,
+        "schedule": "daily",
+        "rules": [
+          "getActiveSubscriptionsPostAction sessionToken taken from jwt:",
+          "ASTROSOTTController searchAccountV2PostAction -- data comes from request:",
+          "ASTROSOTTController refreshTokenPostAction -- data comes from request :"
+        ],
+        "requires_and_combination": false
+      },
+      "ASTRO_NJOI": {
+        "track": true,
+        "schedule": "daily",
+        "rules": [
+          "in BU Astro Njoi API User"
+        ],
+        "pattern": "NJOI-1-{txn_id} - ClassName PayTVAccountDetailsCommand SPAccountId",
+        "requires_and_combination": false
+      },
+      "LIGHTBOX": {
+        "track": true,
+        "schedule": "daily",
+        "rules": [
+          "<channelPartnerID>LIGHTBOX</channelPartnerID>"
+        ],
+        "requires_and_combination": false
+      },
+      "ONE31": {
+        "track": true,
+        "schedule": "daily",
+        "rules": [
+          "getProductsPostAction -- data comes from request",
+          "Business Unit in addPackageAndProduct One31_TH",
+          "updateContactPostAction -- data comes from request:"
+        ],
+        "requires_and_combination": false,
+        "kibana_links": [
+          "https://sg-kibana.evergent.com/app/kibana#/discover?query=%22getProductsPostAction%20--%20data%20comes%20from%20request%20:%20%22"
+        ]
+      },
+      "PILIPINAS": {
+        "track": true,
+        "schedule": "daily",
+        "rules": [
+          "ClassName GetOAuthAccessTokenV2Command SPAccountId AND Pilipinas_Live",
+          "ClassName GetEntitlementsCommand SPAccountId AND Pilipinas_Live",
+          "ClassName GetOAuthAccessTokenV2Command SPAccountId AND Pilipinas_ROW",
+          "ClassName GetEntitlementsCommand SPAccountId AND Pilipinas_ROW"
+        ],
+        "requires_and_combination": true
+      },
+      "TELEKOM_MALAYSIA": {
+        "track": true,
+        "schedule": "daily",
+        "config_files": {
+          "addOrUpdateSubscriptionPostAction.conf": "In TelekomMalaysiaController addOrUpdateSubscriptionPostAction -- data comes from request :",
+          "getAccountProfilePostAction.conf": "TelekomMalaysiaController getAccountProfilePostAction -- data comes from request:",
+          "getOAuthAccessTokenv2PostAction.conf": "TelekomMalaysiaController getOAuthAccessTokenv2PostAction -- data comes from request:",
+          "getUserDetailsPostAction.conf": "TelekomMalaysiaController getUserDetailsPostAction -- data comes from request:",
+          "modifyUserPostAction.conf": "In TelekomMalaysiaController modifyUserPostAction -- data comes from request:",
+          "searchAccountV2PostAction.conf": "TelekomMalaysiaController searchAccountV2PostAction -- data comes from request:",
+          "welcome_email.conf": "eventCode in trackingparams is WELCOME_EMAIL and subEventCode is Account Creation and cpCustomerID AND TELEKOMMALAYSIA"
+        },
+        "requires_and_combination": true
+      },
+      "ASTRO_PAYTV": {
+        "track": false
+      },
+      "BBCASIA": {
+        "track": false
+      },
+      "CIGNAL": {
+        "track": false,
+        "available_rules": [
+          "ClassName GetEntitlementsCommand SPAccountId AND CIGNAL_PH"
+        ]
+      },
+      "CIGNAL_SUPER": {
+        "track": false
+      }
+    },
+    "IN": {
+      "AHA": {
+        "track": true,
+        "schedule": "daily",
+        "rules": [
+          "ClassName CGetEntitlementsCommand SPAccountId AND AHA"
+        ],
+        "requires_and_combination": true,
+        "note": "Updated November 24th, 2025 - old strings not working"
+      },
+      "DAZN": {
+        "track": false
+      },
+      "SONY": {
+        "track": false
+      }
+    }
+  },
+  "special_regions": {
+    "TOKYO": {
+      "customer": "TV_ASAHI",
+      "track": true,
+      "schedule": "daily",
+      "rules": [
+        "createBeaconPostAction --- data comes from request:",
+        "searchAccountV2PostAction -- data comes from request :",
+        "refreshTokenPost AND Raw logData"
+      ],
+      "requires_and_combination": true
+    },
+    "SYDNEY": {
+      "customer": "TVNZ",
+      "track": true,
+      "schedule": "daily",
+      "rules": [
+        "TVNZController searchAccountV2PostAction -- data comes from request:",
+        "TVNZController getProductsPostAction -- data comes from request :",
+        "ClassName CGetEntitlementsCommand SPAccountId",
+        "ClassName CGetAccountProfileCommand SPAccountId",
+        "ClassName CGetContactTermsConditionsCommand SPAccountId",
+        "ClassName CGetAccountContactsCommand SPAccountId AND TVNZ-1",
+        "ClassName CRefreshTokenCommand SPAccountId AND TVNZ-1"
+      ],
+      "requires_and_combination": true,
+      "and_combinations": [
+        "ClassName CGetAccountContactsCommand SPAccountId AND TVNZ-1",
+        "ClassName CRefreshTokenCommand SPAccountId AND TVNZ-1"
+      ]
+    }
+  },
+  "extraction_schedule": {
+    "frequency": "daily",
+    "timezone": "UTC",
+    "batch_mode": "per_customer_per_24h",
+    "retention_days": 30,
+    "recommended_time": "00:00 UTC"
+  }
+}
