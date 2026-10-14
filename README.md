@@ -36,6 +36,10 @@ last9_web_app/
 
 ## Quick start (Docker Compose)
 
+> Prefer the guided path: [`INSTALL.md`](INSTALL.md) (`./install.sh` on Linux,
+> `.\install.ps1` on Windows) handles secrets, ports, build, migrations, seed
+> and health checks in one go. Below is the manual equivalent.
+
 ```bash
 cp .env.example .env
 # Generate the two secrets and paste them into .env:

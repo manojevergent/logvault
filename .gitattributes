@@ -1,0 +1,4 @@
+# Shell scripts must keep LF endings on every platform (bash chokes on CRLF).
+*.sh text eol=lf
+# Windows scripts stay CRLF-friendly; PowerShell accepts both.
+*.ps1 text eol=crlf
