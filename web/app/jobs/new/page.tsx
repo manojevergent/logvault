@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FieldGroup, Input, Label, fieldClass } from "@/components/ui/input";
 import { OutputColumnsEditor, orderBySeq, suggestUniformLayout } from "@/components/output-columns-editor";
+import { TemplatePicker } from "@/components/template-picker";
 import { extractGroupNames } from "@/lib/aggregation";
 import {
   FilterTemplate,
@@ -189,6 +190,11 @@ export default function NewJobPage() {
         ids,
         message_types: messageTypes,
         customer,
+        // Remember where this search was built, so batch runs and future
+        // loads come pre-filled with its source.
+        credential_id: effectiveCredentialId === "" ? null : Number(effectiveCredentialId),
+        region_code: region || null,
+        index_target_id: indexId === "" ? null : Number(indexId),
         aggregation: aggEnabled
           ? {
               enabled: true,
@@ -225,6 +231,9 @@ export default function NewJobPage() {
         ids,
         message_types: messageTypes,
         customer,
+        credential_id: effectiveCredentialId === "" ? null : Number(effectiveCredentialId),
+        region_code: region || null,
+        index_target_id: indexId === "" ? null : Number(indexId),
         aggregation: aggEnabled
           ? {
               enabled: true,
@@ -591,10 +600,13 @@ export default function NewJobPage() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl animate-fade-in px-6 py-8">
-      <h1 className="pb-6 text-xl font-semibold tracking-tight">New extraction</h1>
+    <div className="mx-auto max-w-6xl animate-fade-in px-4 py-5">
+      <h1 className="pb-3 text-xl font-semibold tracking-tight">New extraction</h1>
 
-      <div className="space-y-4">
+      {/* Two columns on wide screens so the whole form fits ~one viewport:
+          multicol keeps DOM order (no code moves) with break-inside-avoid so
+          no card ever splits across columns. Single column below xl. */}
+      <div className="xl:columns-2 [&>*]:mb-3 [&>*]:break-inside-avoid">
         {/* One source profile carries region + index + credential. */}
         <Section title="Source">
           <Field label="Source" className="sm:col-span-2">
@@ -625,7 +637,10 @@ export default function NewJobPage() {
               <p className="text-xs text-muted-foreground">
                 {selectedIndex.region_code} · index{" "}
                 <span className="font-mono">
-                  {selectedIndex.physical_index ?? selectedIndex.name}
+                  {selectedIndex.physical_index ||
+                    (selectedIndex.full_index_string
+                      ? selectedIndex.name
+                      : "Default (org default)")}
                 </span>
                 {selectedIndex.credential_label ? (
                   <> · credential {selectedIndex.credential_label}</>
@@ -633,6 +648,32 @@ export default function NewJobPage() {
               </p>
             )}
           </Field>
+          {/* The loaded search remembers where it was built — one click pulls
+              that source in, instead of re-picking it every time. */}
+          {(() => {
+            const loaded = templates?.find((t) => t.id === templateId);
+            const savedIdx = allIndexes?.find((i) => i.id === loaded?.index_target_id);
+            if (!loaded?.index_target_id || !savedIdx || savedIdx.id === indexId) return null;
+            return (
+              <p className="text-xs text-muted-foreground sm:col-span-2">
+                Saved with this search:{" "}
+                <span className="font-medium text-foreground">
+                  {savedIdx.name} · {savedIdx.region_code}
+                </span>{" "}
+                <button
+                  type="button"
+                  className="text-primary underline"
+                  onClick={() => {
+                    setIndexId(savedIdx.id);
+                    setRegion(savedIdx.region_code);
+                    if (savedIdx.credential_id) setCredentialId(savedIdx.credential_id);
+                  }}
+                >
+                  Use saved source
+                </button>
+              </p>
+            );
+          })()}
           {/* Only asked for when the chosen source doesn't name a credential —
               targets created before profiles existed. */}
           {(!selectedIndex || !selectedIndex.credential_id) && (
@@ -769,24 +810,15 @@ export default function NewJobPage() {
           <div className="flex flex-wrap items-end gap-3 sm:col-span-2">
             <div className="min-w-[220px] flex-1 space-y-1.5">
               <Label>Load a saved search</Label>
-              <select
-                className={fieldClass}
+              <TemplatePicker
+                templates={templates ?? []}
                 value={templateId}
-                onChange={(e) => {
-                  const v = e.target.value ? Number(e.target.value) : "";
+                onPick={(v) => {
                   setTemplateId(v);
                   const tpl = templates?.find((t) => t.id === v);
                   if (tpl) applyTemplate(tpl);
                 }}
-              >
-                <option value="">{templates?.length ? "Choose a saved search…" : "No saved searches yet"}</option>
-                {templates?.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                    {t.aggregation?.enabled ? " (with parse & aggregate)" : ""}
-                  </option>
-                ))}
-              </select>
+              />
             </div>
             {savingTemplate ? (
               <>
@@ -1253,24 +1285,26 @@ export default function NewJobPage() {
           </Field>
         </Section>
 
-        {/* 6. Review & run */}
-        <div className="flex items-center justify-end gap-3">
-          {create.isError && (
-            <p className="text-xs text-danger">{(create.error as Error).message}</p>
-          )}
-          <Button
-            variant="outline"
-            disabled={!canRun || create.isPending}
-            onClick={() => create.mutate(true)}
-            title="Run only the first chunk, capped — to validate the filter"
-          >
-            Test filter
-          </Button>
-          <Button disabled={!canRun || create.isPending} onClick={() => create.mutate(false)}>
-            {create.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
-            Run extraction
-          </Button>
-        </div>
+      </div>
+
+      {/* 6. Review & run — pinned to the viewport bottom so it is always at
+          hand on a form that now spans columns. */}
+      <div className="sticky bottom-0 z-10 -mx-4 mt-3 flex items-center justify-end gap-3 border-t border-border bg-background/95 px-4 py-2 backdrop-blur">
+        {create.isError && (
+          <p className="text-xs text-danger">{(create.error as Error).message}</p>
+        )}
+        <Button
+          variant="outline"
+          disabled={!canRun || create.isPending}
+          onClick={() => create.mutate(true)}
+          title="Run only the first chunk, capped — to validate the filter"
+        >
+          Test filter
+        </Button>
+        <Button disabled={!canRun || create.isPending} onClick={() => create.mutate(false)}>
+          {create.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
+          Run extraction
+        </Button>
       </div>
     </div>
   );
@@ -1282,7 +1316,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       <CardHeader>
         <CardTitle className="text-foreground">{title}</CardTitle>
       </CardHeader>
-      <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2">{children}</CardContent>
+      <CardContent className="grid grid-cols-1 gap-3 sm:grid-cols-2">{children}</CardContent>
     </Card>
   );
 }

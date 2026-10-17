@@ -21,9 +21,17 @@ from app import audit, signing
 from app.aggregation import validate_aggregation
 from app.database import SessionLocal, get_db
 from app.deps import get_current_user
-from app.models import IndexTarget, Job, JobEvent, Last9Credential, Schedule, User
+from app.models import FilterTemplate, IndexTarget, Job, JobEvent, Last9Credential, Schedule, User
 from app.portability import credential_ref, index_ref, resolve_credential, resolve_index
-from app.schemas import JobCreate, JobEventOut, JobExport, JobOut, JobStatus, RollupCreate
+from app.schemas import (
+    BatchCreate,
+    JobCreate,
+    JobEventOut,
+    JobExport,
+    JobOut,
+    JobStatus,
+    RollupCreate,
+)
 from app.tasks_client import dispatch_job
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -102,9 +110,10 @@ def _timeframe(start_epoch: int, end_epoch: int) -> str:
 
 
 def download_filename(job: Job, kind: str = "raw", *, compressed: bool = True) -> str:
-    """`<saved search>_<timeframe>[_summary|_counts].<ext>[.zip]`, e.g.
-    AHA_CGetEntitlements_2026-08-30_counts.csv.zip — exported files are
-    compressed by default.
+    """`<saved search>_<job id>_<timeframe>[_summary|_counts].<ext>[.zip]`, e.g.
+    AHA_CGetEntitlements_16_2026-08-30_counts.csv.zip — exported files are
+    compressed by default. The job id disambiguates batch runs, where several
+    jobs share one search name and one window.
 
     `compressed` must reflect the actual file on disk, not an assumption: a
     preview ("Test filter") run's raw output is written plain regardless of
@@ -115,8 +124,12 @@ def download_filename(job: Job, kind: str = "raw", *, compressed: bool = True) -
 
     Falls back to the job id when the job wasn't created from a saved search.
     """
-    label = (job.filter_spec or {}).get("label") or f"logvault_job_{job.id}"
-    stem = _UNSAFE_IN_FILENAME.sub("_", label).strip("_") or f"job_{job.id}"
+    label = (job.filter_spec or {}).get("label")
+    if label:
+        stem = _UNSAFE_IN_FILENAME.sub("_", label).strip("_") or f"job_{job.id}"
+        stem = f"{stem}_{job.id}"
+    else:
+        stem = f"logvault_job_{job.id}"
     name = f"{stem}_{_timeframe(job.start_epoch, job.end_epoch)}"
     suffix = ".zip" if compressed else ""
     if kind in ("summary", "counts"):
@@ -132,25 +145,76 @@ def _get_or_404(db: Session, job_id: int) -> Job:
     return job
 
 
+def _validate_agg_dict(agg: dict | None) -> None:
+    """The create_job aggregation check, generalized to stored dicts (batch
+    items carry the template's saved config, not a fresh AggregationSpec)."""
+    if agg and agg.get("enabled"):
+        try:
+            validate_aggregation(
+                agg.get("regex", ""),
+                agg.get("group_by", []),
+                agg.get("unique_fields", []),
+                agg.get("raw_columns", []),
+                agg.get("raw_column_defaults", {}),
+                agg.get("use_library", False),
+            )
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+
+
+def _new_job_row(
+    *,
+    credential_id: int,
+    index_target_id: int,
+    region_code: str,
+    start_epoch: int,
+    end_epoch: int,
+    chunk_hours: int,
+    id_batch_size: int,
+    phrases: list[str],
+    ids: list[str],
+    message_types: list[str],
+    output_format: str,
+    is_preview: bool,
+    aggregation: dict | None,
+    label: str,
+    customer: str,
+    created_by: str | None,
+) -> Job:
+    filter_spec: dict = {"phrases": phrases, "ids": ids, "message_types": message_types}
+    if aggregation:
+        filter_spec["aggregation"] = aggregation
+    if label:
+        filter_spec["label"] = label
+    if customer:
+        filter_spec["customer"] = customer
+    return Job(
+        status="queued",
+        region_code=region_code,
+        index_target_id=index_target_id,
+        credential_id=credential_id,
+        start_epoch=start_epoch,
+        end_epoch=end_epoch,
+        chunk_hours=chunk_hours,
+        id_batch_size=id_batch_size,
+        filter_spec=filter_spec,
+        output_format=output_format,
+        is_preview=is_preview,
+        # Same column scheduled runs use for "schedule:N". It was left NULL for
+        # everything created here, so nothing recorded who ran an extraction —
+        # and the worker's failure net tripped over the None.
+        created_by=created_by,
+    )
+
+
 @router.post("", response_model=JobOut, status_code=status.HTTP_201_CREATED)
 def create_job(
     body: JobCreate,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> JobOut:
-    agg = body.aggregation
-    if agg and agg.enabled:
-        try:
-            validate_aggregation(
-                agg.regex,
-                agg.group_by,
-                agg.unique_fields,
-                agg.raw_columns,
-                agg.raw_column_defaults,
-                agg.use_library,
-            )
-        except ValueError as exc:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    agg = body.aggregation.model_dump() if body.aggregation else None
+    _validate_agg_dict(agg)
 
     # Fail here, not an hour into the run: a cloned job (or an index target left
     # pointing at a deleted credential) used to queue fine and die in the worker
@@ -160,29 +224,22 @@ def create_job(
     if db.get(IndexTarget, body.index_target_id) is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "index no longer exists")
 
-    filter_spec = {"phrases": body.phrases, "ids": body.ids, "message_types": body.message_types}
-    if agg:
-        filter_spec["aggregation"] = agg.model_dump()
-    if body.label:
-        filter_spec["label"] = body.label
-    if body.customer:
-        filter_spec["customer"] = body.customer
-
-    job = Job(
-        status="queued",
-        region_code=body.region_code,
-        index_target_id=body.index_target_id,
+    job = _new_job_row(
         credential_id=body.credential_id,
+        index_target_id=body.index_target_id,
+        region_code=body.region_code,
         start_epoch=body.start_epoch,
         end_epoch=body.end_epoch,
         chunk_hours=body.chunk_hours,
         id_batch_size=body.id_batch_size,
-        filter_spec=filter_spec,
+        phrases=body.phrases,
+        ids=body.ids,
+        message_types=body.message_types,
         output_format=body.output_format,
         is_preview=body.is_preview,
-        # Same column scheduled runs use for "schedule:N". It was left NULL for
-        # everything created here, so nothing recorded who ran an extraction —
-        # and the worker's failure net tripped over the None.
+        aggregation=agg,
+        label=body.label,
+        customer=body.customer,
         created_by=user.email,
     )
     db.add(job)
@@ -192,6 +249,114 @@ def create_job(
     db.refresh(job)
     dispatch_job(job.id)
     return _to_out(job, credential_label=_cred_label(db, job.credential_id))
+
+
+# One request queuing dozens of multi-hour extractions is how a mistaken click
+# turns into a Last9 bill and a saturated worker pool. Fifty is far above any
+# real invoice batch (13 searches) while still catching accidents.
+MAX_BATCH_ITEMS = 50
+
+
+@router.post("/batch", response_model=list[JobOut], status_code=status.HTTP_201_CREATED)
+def create_batch(
+    body: BatchCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[JobOut]:
+    """Run several saved searches over one shared window — one job per search,
+    each file named `<search>_<job id>_<window>`. All-or-nothing: every entry
+    is validated before the first job queues, so a bad template or a deleted
+    credential fails the request instead of half the batch."""
+    if not body.items:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "at least one search is required")
+    if len(body.items) > MAX_BATCH_ITEMS:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"at most {MAX_BATCH_ITEMS} searches per batch",
+        )
+    if body.end_epoch <= body.start_epoch:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "end must be after start")
+
+    # (template, aggregation, resolved credential/index/region). Resolved once
+    # here so validation and creation can't disagree about the source.
+    plans: list[tuple[FilterTemplate, dict | None, int, int, str]] = []
+    for item in body.items:
+        tpl = db.get(FilterTemplate, item.template_id)
+        if tpl is None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"saved search {item.template_id} no longer exists",
+            )
+        # Explicit per-entry source wins; otherwise the search's remembered
+        # source. Anything still missing names the search that needs one.
+        credential_id = item.credential_id if item.credential_id is not None else tpl.credential_id
+        index_target_id = (
+            item.index_target_id if item.index_target_id is not None else tpl.index_target_id
+        )
+        region_code = item.region_code if item.region_code is not None else tpl.region_code
+        if credential_id is None or index_target_id is None or region_code is None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"search {tpl.name!r} has no source: pick one per row or save a default on the search",
+            )
+        if db.get(Last9Credential, credential_id) is None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"credential no longer exists (search {tpl.name!r})",
+            )
+        if db.get(IndexTarget, index_target_id) is None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"index no longer exists (search {tpl.name!r})",
+            )
+        agg = dict(tpl.aggregation) if tpl.aggregation else None
+        _validate_agg_dict(agg)
+        plans.append((tpl, agg, credential_id, index_target_id, region_code))
+
+    jobs = [
+        _new_job_row(
+            credential_id=credential_id,
+            index_target_id=index_target_id,
+            region_code=region_code,
+            start_epoch=body.start_epoch,
+            end_epoch=body.end_epoch,
+            chunk_hours=body.chunk_hours,
+            id_batch_size=body.id_batch_size,
+            phrases=list(tpl.phrases),
+            ids=list(tpl.ids),
+            message_types=list(tpl.message_types),
+            output_format=body.output_format,
+            is_preview=body.is_preview,
+            aggregation=agg,
+            label=tpl.name,
+            customer=tpl.customer or "",
+            created_by=user.email,
+        )
+        for tpl, agg, credential_id, index_target_id, region_code in plans
+    ]
+    db.add_all(jobs)
+    db.flush()
+    for job, (tpl, _agg, _cred, _idx, _region) in zip(jobs, plans, strict=True):
+        audit.record(
+            db,
+            "create",
+            "job",
+            job.id,
+            {"region": job.region_code, "batch": tpl.name},
+            user_id=user.email,
+        )
+    db.commit()
+    for job in jobs:
+        db.refresh(job)
+    for job in jobs:
+        dispatch_job(job.id)
+    labels = {
+        c.id: c.label
+        for c in db.query(Last9Credential).filter(
+            Last9Credential.id.in_({j.credential_id for j in jobs})
+        )
+    }
+    return [_to_out(job, credential_label=labels.get(job.credential_id)) for job in jobs]
 
 
 @router.get("/{job_id}/export", response_model=JobExport)
@@ -409,17 +574,16 @@ def list_jobs(
     status_filter: JobStatus | None = Query(default=None, alias="status"),
     limit: int = Query(default=200, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
+    include_previews: bool = Query(default=False),
     db: Session = Depends(get_db),
 ) -> list[JobOut]:
     # Bounded by default: a daily schedule left running for a year is ~365 rows
     # on its own, and this list is re-polled every few seconds by every open tab.
-    stmt = (
-        select(*_LIST_COLUMNS)
-        .where(Job.is_preview.is_(False))
-        .order_by(Job.created_at.desc())
-        .limit(limit)
-        .offset(offset)
-    )
+    # Filter-test previews stay out unless asked: they would drown the real
+    # extractions otherwise (every "Test filter" click is a job row).
+    stmt = select(*_LIST_COLUMNS).order_by(Job.created_at.desc()).limit(limit).offset(offset)
+    if not include_previews:
+        stmt = stmt.where(Job.is_preview.is_(False))
     if status_filter:
         stmt = stmt.where(Job.status == status_filter)
     rows = db.execute(stmt).mappings().all()

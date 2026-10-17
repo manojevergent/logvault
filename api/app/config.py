@@ -38,6 +38,29 @@ class Settings(BaseSettings):
     initial_admin_email: str = ""
     initial_admin_password: str = ""
 
+    # Google sign-in (OAuth authorization-code flow). Empty client id/secret
+    # disables it entirely and the login page shows password auth only.
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    # Comma-separated Workspace domains allowed to sign in, e.g.
+    # "evergent.com". Empty allows any Google account (verified email still
+    # required) — set this before exposing the app beyond a trusted network.
+    google_allowed_domains: str = ""
+    # Public bases used to build the OAuth redirect URI and the post-login
+    # landing page. redirect_uri sent to Google is
+    # {public_api_base}/auth/google/callback and must match an Authorized
+    # redirect URI in the Google Cloud console exactly.
+    public_api_base: str = "http://localhost:8000"
+    web_base_url: str = "http://localhost:3001"
+
+    @property
+    def google_enabled(self) -> bool:
+        return bool(self.google_client_id and self.google_client_secret)
+
+    @property
+    def google_domain_list(self) -> list[str]:
+        return [d.strip().lower() for d in self.google_allowed_domains.split(",") if d.strip()]
+
     # Storage
     storage_dir: str = "/data/exports"
     download_url_ttl_seconds: int = 604800

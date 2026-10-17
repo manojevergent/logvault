@@ -85,6 +85,20 @@ def test_list_and_get(client, monkeypatch):
     assert client.get("/jobs/9999").status_code == 404
 
 
+def test_list_hides_previews_unless_asked(client, monkeypatch):
+    """Filter-test runs stay out of the Jobs list (they would drown it —
+    every Test filter click is a job row) until ?include_previews=true."""
+    real = _create(client, monkeypatch).json()["id"]
+    prev = _create(client, monkeypatch, is_preview=True).json()["id"]
+
+    listed = client.get("/jobs").json()
+    assert [j["id"] for j in listed] == [real]
+
+    listed = client.get("/jobs", params={"include_previews": "true"}).json()
+    assert {j["id"] for j in listed} == {real, prev}
+    assert [j for j in listed if j["id"] == prev][0]["is_preview"] is True
+
+
 def test_download_rejects_bad_signature(client, monkeypatch):
     jid = _create(client, monkeypatch).json()["id"]
     assert client.get(f"/jobs/{jid}/download?exp=9999999999&sig=bad").status_code == 403

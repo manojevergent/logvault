@@ -171,6 +171,10 @@ export type FilterTemplate = {
   aggregation: AggregationSpec | null;
   /** Extracts from this search land in this customer's folder. */
   customer: string | null;
+  /** Remembered source — null when the search predates source memory. */
+  credential_id: number | null;
+  region_code: string | null;
+  index_target_id: number | null;
   created_by: string | null;
   created_at: string;
 };
@@ -182,6 +186,9 @@ export type FilterTemplateInput = {
   message_types: string[];
   aggregation?: AggregationSpec | null;
   customer?: string;
+  credential_id?: number | null;
+  region_code?: string | null;
+  index_target_id?: number | null;
 };
 
 export const listTemplates = () => req<FilterTemplate[]>("/templates");
@@ -297,7 +304,7 @@ export type JobCreateInput = {
   message_types?: string[];
   output_format?: "csv" | "jsonl" | "bigquery";
   is_preview?: boolean;
-  /** Saved-search name; names the downloads `<label>_<timeframe>.csv`. */
+  /** Saved-search name; names the downloads `<label>_<job id>_<timeframe>.csv`. */
   label?: string;
   /** Groups the output files into one folder per customer. */
   customer?: string;
@@ -314,12 +321,35 @@ export const JOB_TONE: Record<JobStatus, "neutral" | "info" | "warning" | "succe
 };
 
 // Bounded by default. The list is polled every few seconds by every open tab,
-// and list responses omit `preview`/`aggregation_result`/`rollup_of` and carry
+// list responses omit `preview`/`aggregation_result`/`rollup_of` and carry
 // only the label+customer keys of `filter_spec` — use getJob() for the rest.
-export const listJobs = (limit = 200) => req<Job[]>(`/jobs?limit=${limit}`);
+// Filter-test previews are excluded unless asked (see the Previews tab).
+export const listJobs = (limit = 200, includePreviews = false) =>
+  req<Job[]>(`/jobs?limit=${limit}${includePreviews ? "&include_previews=true" : ""}`);
 export const getJob = (id: number) => req<Job>(`/jobs/${id}`);
 export const createJob = (body: JobCreateInput) =>
   req<Job>("/jobs", { method: "POST", body: JSON.stringify(body) });
+
+export type BatchItemInput = {
+  template_id: number;
+  /** Per-entry override; blank falls back to the search's remembered source. */
+  credential_id?: number | null;
+  index_target_id?: number | null;
+  region_code?: string | null;
+};
+
+export type BatchCreateInput = {
+  items: BatchItemInput[];
+  start_epoch: number;
+  end_epoch: number;
+  chunk_hours?: number;
+  id_batch_size?: number;
+  is_preview?: boolean;
+};
+
+/** One job per saved search over a shared window. All-or-nothing server-side. */
+export const createBatchJobs = (body: BatchCreateInput) =>
+  req<Job[]>("/jobs/batch", { method: "POST", body: JSON.stringify(body) });
 export const pauseJob = (id: number) => req<Job>(`/jobs/${id}/pause`, { method: "POST" });
 export const resumeJob = (id: number) => req<Job>(`/jobs/${id}/resume`, { method: "POST" });
 export const cancelJob = (id: number) => req<Job>(`/jobs/${id}/cancel`, { method: "POST" });
@@ -420,6 +450,14 @@ export type AuthUser = {
   created_at: string;
 };
 export type LoginResult = { access_token: string; token_type: string; role: string };
+
+export type AuthProviders = { password: boolean; google: boolean };
+
+export async function getAuthProviders(): Promise<AuthProviders> {
+  const res = await fetch(`${API_BASE}/auth/providers`, { cache: "no-store" });
+  if (!res.ok) return { password: true, google: false };
+  return res.json();
+}
 
 export async function loginUser(email: string, password: string): Promise<LoginResult> {
   const res = await fetch(`${API_BASE}/auth/login`, {

@@ -109,6 +109,29 @@ def test_request_uses_custom_header_url_params_and_body():
     assert body == {"pipeline": PIPE}
 
 
+def test_empty_index_omits_the_index_param_for_the_org_default():
+    """The org's Default index is addressed by sending no `index` at all —
+    any value (even the UI's "Default" label) 400s with a misleading
+    "parse error: invalid JSON pipeline". Verified live against Singapore."""
+    captured: list[httpx.Request] = []
+    handler = sequence_handler([query_response([("1", "hello")])], captured)
+    client = make_client(handler)
+
+    rows = list(
+        client.iter_rows(
+            index="",
+            region="ap-southeast-1",
+            start=0,
+            end=3600,
+            pipeline=PIPE,
+        )
+    )
+    assert len(rows) == 1
+    params = dict(captured[0].url.params)
+    assert "index" not in params
+    assert params["region"] == "ap-southeast-1"
+
+
 # ── pagination & streaming (§2.8) ────────────────────────────────────────────
 
 

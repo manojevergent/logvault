@@ -9,6 +9,12 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
+  // The Google OAuth landing page carries the fresh session in the URL
+  // fragment — by definition there is no cookie yet, so it must be public.
+  if (pathname === "/auth/callback") {
+    return NextResponse.next();
+  }
+
   if (!token) {
     const url = new URL("/login", request.url);
     url.searchParams.set("from", pathname);

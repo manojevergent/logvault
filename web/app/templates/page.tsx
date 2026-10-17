@@ -7,9 +7,20 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { FieldGroup, Input, Label, fieldClass } from "@/components/ui/input";
-import { FilterTemplate, deleteTemplate, listLogFormats, listTemplates, updateTemplate } from "@/lib/api";
+import {
+  FilterTemplate,
+  Job,
+  createBatchJobs,
+  deleteTemplate,
+  listCredentials,
+  listIndexes,
+  listLogFormats,
+  listTemplates,
+  updateTemplate,
+} from "@/lib/api";
 import { OutputColumnsEditor, orderBySeq, suggestUniformLayout } from "@/components/output-columns-editor";
 import { extractGroupNames } from "@/lib/aggregation";
+import { PRESETS, Tz, epochToLocal, formatEpoch, localToEpoch } from "@/lib/time";
 
 function splitCsv(s: string): string[] {
   return s
@@ -43,8 +54,20 @@ export default function TemplatesPage() {
     queryKey: ["templates"],
     queryFn: listTemplates,
   });
+  // Batch runs: tick several searches, run them all over one shared window.
+  const [selection, setSelection] = React.useState<Set<number>>(new Set());
+  const [batchOpen, setBatchOpen] = React.useState(false);
 
   const refresh = () => qc.invalidateQueries({ queryKey: ["templates"] });
+
+  function toggleSelect(id: number) {
+    setSelection((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   return (
     <div className="mx-auto max-w-5xl animate-fade-in px-6 py-8">
@@ -70,16 +93,58 @@ export default function TemplatesPage() {
         </div>
       )}
 
+      {selection.size > 0 && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 border border-border bg-muted/40 px-3 py-2">
+          <span className="text-sm font-medium">
+            {selection.size} selected
+          </span>
+          <div className="flex-1" />
+          <Button size="sm" variant="ghost" onClick={() => setSelection(new Set())}>
+            Clear
+          </Button>
+          <Button size="sm" onClick={() => setBatchOpen(true)}>
+            Run {selection.size} over one window…
+          </Button>
+        </div>
+      )}
+
       <div className="space-y-3">
         {templates?.map((t) => (
-          <TemplateCard key={t.id} tpl={t} onChange={refresh} />
+          <TemplateCard
+            key={t.id}
+            tpl={t}
+            onChange={refresh}
+            selected={selection.has(t.id)}
+            onToggle={() => toggleSelect(t.id)}
+          />
         ))}
       </div>
+
+      {batchOpen && (
+        <BatchDialog
+          templates={(templates ?? []).filter((t) => selection.has(t.id))}
+          onClose={() => setBatchOpen(false)}
+          onDone={() => {
+            setBatchOpen(false);
+            setSelection(new Set());
+          }}
+        />
+      )}
     </div>
   );
 }
 
-function TemplateCard({ tpl, onChange }: { tpl: FilterTemplate; onChange: () => void }) {
+function TemplateCard({
+  tpl,
+  onChange,
+  selected,
+  onToggle,
+}: {
+  tpl: FilterTemplate;
+  onChange: () => void;
+  selected: boolean;
+  onToggle: () => void;
+}) {
   const [editing, setEditing] = React.useState(false);
   const del = useMutation({ mutationFn: () => deleteTemplate(tpl.id), onSuccess: onChange });
 
@@ -99,7 +164,16 @@ function TemplateCard({ tpl, onChange }: { tpl: FilterTemplate; onChange: () => 
   return (
     <Card>
       <CardContent className="flex flex-wrap items-start justify-between gap-4 p-4">
-        <div className="min-w-0 space-y-1.5">
+        <div className="flex min-w-0 items-start gap-3">
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={onToggle}
+            className="mt-1 h-4 w-4"
+            aria-label={`Select ${tpl.name} for batch run`}
+            title="Select for batch run"
+          />
+          <div className="min-w-0 space-y-1.5">
           <div className="flex items-center gap-2">
             <span className="font-medium">{tpl.name}</span>
             {tpl.aggregation?.enabled && <Badge tone="info">parse & aggregate</Badge>}
@@ -116,6 +190,7 @@ function TemplateCard({ tpl, onChange }: { tpl: FilterTemplate; onChange: () => 
                 {tpl.ids.length} ID{tpl.ids.length === 1 ? "" : "s"}
               </Badge>
             )}
+          </div>
           </div>
         </div>
         <div className="flex items-center gap-1">
@@ -202,6 +277,19 @@ function TemplateEditForm({
   const [includeMessageColumn, setIncludeMessageColumn] = React.useState(
     agg?.include_message ?? true
   );
+  // Remembered source: pre-fills batch runs and the wizard. Blank = no
+  // default (source picked at run time, as before).
+  const { data: allIndexes } = useQuery({ queryKey: ["indexes", ""], queryFn: () => listIndexes() });
+  const { data: credentials } = useQuery({ queryKey: ["credentials"], queryFn: listCredentials });
+  const [sourceIdx, setSourceIdx] = React.useState<number | "">(tpl.index_target_id ?? "");
+  const [sourceCred, setSourceCred] = React.useState<number | "">(tpl.credential_id ?? "");
+  const sourceTarget = allIndexes?.find((i) => i.id === sourceIdx);
+  const resolvedSource = {
+    credential_id:
+      sourceCred === "" || sourceCred == null ? sourceTarget?.credential_id ?? null : Number(sourceCred),
+    region_code: sourceTarget?.region_code ?? tpl.region_code ?? null,
+    index_target_id: sourceIdx === "" ? null : Number(sourceIdx),
+  };
 
   const groupBy = splitCsv(groupByText);
   const uniqueFields = splitCsv(uniqueFieldsText);
@@ -299,6 +387,9 @@ function TemplateEditForm({
         ids: splitCsv(idsText),
         message_types: splitCsv(messageTypesText),
         customer: customer.trim(),
+        credential_id: resolvedSource.credential_id,
+        region_code: resolvedSource.region_code,
+        index_target_id: resolvedSource.index_target_id,
         aggregation: aggEnabled
           ? {
               enabled: true,
@@ -336,6 +427,40 @@ function TemplateEditForm({
           <Field label="Customer folder (optional)">
             <Input value={customer} onChange={(e) => setCustomer(e.target.value)} />
           </Field>
+          <Field label="Default source (optional)">
+            <select
+              className={fieldClass}
+              value={sourceIdx}
+              onChange={(e) => setSourceIdx(e.target.value ? Number(e.target.value) : "")}
+            >
+              <option value="">No default — pick at run time…</option>
+              {allIndexes?.map((i) => (
+                <option key={i.id} value={i.id}>
+                  {i.name} · {i.region_code}
+                  {i.credential_label ? ` · ${i.credential_label}` : ""}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-muted-foreground">
+              Pre-fills batch runs and the wizard with this search&rsquo;s source.
+            </p>
+          </Field>
+          {sourceTarget && !sourceTarget.credential_id && (
+            <Field label="Credential (source has none)">
+              <select
+                className={fieldClass}
+                value={sourceCred}
+                onChange={(e) => setSourceCred(e.target.value ? Number(e.target.value) : "")}
+              >
+                <option value="">Pick at run time…</option>
+                {credentials?.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.label} ({c.org_slug})
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
           <Field label="Phrases (comma-separated)" className="sm:col-span-2">
             <Input value={phrasesText} onChange={(e) => setPhrasesText(e.target.value)} />
           </Field>
@@ -572,5 +697,326 @@ function TemplateEditForm({
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+// ── batch runs ──────────────────────────────────────────────────────────────
+// Tick several searches, run them all over one shared window — one job each,
+// each file named <search>_<job id>_<window>. Every row needs its own source
+// because searches are deliberately not tied to a region; "set all" covers the
+// common same-region case.
+
+function BatchDialog({
+  templates,
+  onClose,
+  onDone,
+}: {
+  templates: FilterTemplate[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const [tz, setTz] = React.useState<Tz>("UTC");
+  const [preset, setPreset] = React.useState<number | "custom">(86400);
+  const [customStart, setCustomStart] = React.useState(epochToLocal(nowSec - 86400, "UTC"));
+  const [customEnd, setCustomEnd] = React.useState(epochToLocal(nowSec, "UTC"));
+  const [preview, setPreview] = React.useState(false);
+  // Pre-filled from each search's remembered source — the whole point of
+  // saving one. Rows without a remembered source still ask, as before.
+  const [indexByTpl, setIndexByTpl] = React.useState<Record<number, number | "">>(() =>
+    Object.fromEntries(
+      templates.filter((t) => t.index_target_id != null).map((t) => [t.id, t.index_target_id as number])
+    )
+  );
+  const [credByTpl, setCredByTpl] = React.useState<Record<number, number | "">>(() =>
+    Object.fromEntries(
+      templates.filter((t) => t.credential_id != null).map((t) => [t.id, t.credential_id as number])
+    )
+  );
+  const [bulkIndex, setBulkIndex] = React.useState<number | "">("");
+  const [created, setCreated] = React.useState<Job[] | null>(null);
+
+  const { data: allIndexes } = useQuery({ queryKey: ["indexes", ""], queryFn: () => listIndexes() });
+  const { data: credentials } = useQuery({ queryKey: ["credentials"], queryFn: listCredentials });
+
+  const { start, end } =
+    preset === "custom"
+      ? { start: localToEpoch(customStart, tz), end: localToEpoch(customEnd, tz) }
+      : { start: nowSec - preset, end: nowSec };
+  const validRange = end > start;
+
+  function sourceFor(t: FilterTemplate) {
+    // A cleared row falls back to the search's remembered source — same rule
+    // the API applies, so the dialog never blocks on a search that has one.
+    const pickedIdx = indexByTpl[t.id];
+    const idx = allIndexes?.find(
+      (i) => i.id === (pickedIdx === "" || pickedIdx == null ? t.index_target_id : pickedIdx)
+    );
+    const pickedCred = credByTpl[t.id];
+    const credId =
+      pickedCred === "" || pickedCred == null
+        ? (t.credential_id ?? idx?.credential_id)
+        : Number(pickedCred);
+    return { idx, credId: credId ?? null };
+  }
+
+  const rowsReady = templates.every((t) => {
+    const { idx, credId } = sourceFor(t);
+    return idx && credId;
+  });
+
+  const run = useMutation({
+    mutationFn: () =>
+      createBatchJobs({
+        items: templates.map((t) => {
+          const { idx, credId } = sourceFor(t);
+          return {
+            template_id: t.id,
+            credential_id: Number(credId),
+            index_target_id: Number(idx!.id),
+            region_code: idx!.region_code,
+          };
+        }),
+        start_epoch: start,
+        end_epoch: end,
+        is_preview: preview,
+      }),
+    onSuccess: (jobs) => setCreated(jobs),
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-auto bg-background/80 p-4 backdrop-blur-sm">
+      <Card className="my-8 w-full max-w-3xl">
+        <CardContent className="space-y-5 p-5">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-semibold tracking-tight">
+              Run {templates.length} search{templates.length === 1 ? "" : "es"} over one window
+            </h2>
+            <Button size="icon" variant="ghost" aria-label="Close" onClick={onClose}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+
+          {created ? (
+            <div className="space-y-2">
+              <p className="text-sm text-success">
+                {created.length} job{created.length === 1 ? "" : "s"} queued — files will be
+                named <span className="font-mono">&lt;search&gt;_&lt;job id&gt;_&lt;window&gt;</span>.
+              </p>
+              <div className="space-y-1">
+                {created.map((j) => (
+                  <a
+                    key={j.id}
+                    href={`/jobs/${j.id}`}
+                    className="block border border-border px-3 py-1.5 text-sm hover:border-primary"
+                  >
+                    <span className="font-medium">{j.filter_spec.label}</span>
+                    <span className="text-muted-foreground"> · job #{j.id} · {j.status}</span>
+                  </a>
+                ))}
+              </div>
+              <div className="flex justify-end gap-2 pt-1">
+                <Button size="sm" variant="outline" onClick={onClose}>
+                  Stay here
+                </Button>
+                <Button size="sm" onClick={onDone}>
+                  Done
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="space-y-2">
+                <Label>Shared time window ({tz})</Label>
+                <div className="flex flex-wrap items-center gap-2">
+                  {PRESETS.map((p) => (
+                    <Button
+                      key={p.label}
+                      type="button"
+                      size="sm"
+                      variant={preset === p.seconds ? "primary" : "outline"}
+                      onClick={() => setPreset(p.seconds)}
+                    >
+                      {p.label}
+                    </Button>
+                  ))}
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={preset === "custom" ? "primary" : "outline"}
+                    onClick={() => setPreset("custom")}
+                  >
+                    Custom
+                  </Button>
+                  {(["UTC", "IST"] as Tz[]).map((z) => (
+                    <button
+                      key={z}
+                      type="button"
+                      onClick={() => setTz(z)}
+                      className={`border px-3 py-1 text-xs font-semibold ${
+                        tz === z
+                          ? "border-transparent bg-primary text-primary-foreground"
+                          : "border-border text-muted-foreground"
+                      }`}
+                    >
+                      {z}
+                    </button>
+                  ))}
+                </div>
+                {preset === "custom" ? (
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <Label>Start ({tz})</Label>
+                      <Input
+                        type="datetime-local"
+                        value={customStart}
+                        onChange={(e) => setCustomStart(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>End ({tz})</Label>
+                      <Input
+                        type="datetime-local"
+                        value={customEnd}
+                        onChange={(e) => setCustomEnd(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                ) : null}
+                <p className="font-mono text-xs text-muted-foreground">
+                  {validRange ? (
+                    <>Resolved: {formatEpoch(start)} → {formatEpoch(end)} UTC</>
+                  ) : (
+                    <span className="text-danger">End must be after start.</span>
+                  )}
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-end gap-3">
+                  <div className="min-w-[220px] flex-1 space-y-1.5">
+                    <Label>Set all sources to</Label>
+                    <select
+                      className={fieldClass}
+                      value={bulkIndex}
+                      onChange={(e) => {
+                        const v = e.target.value ? Number(e.target.value) : "";
+                        setBulkIndex(v);
+                        if (v !== "") {
+                          const next: Record<number, number> = {};
+                          for (const t of templates) next[t.id] = v;
+                          setIndexByTpl(next);
+                        }
+                      }}
+                    >
+                      <option value="">Choose once for every row…</option>
+                      {allIndexes?.map((i) => (
+                        <option key={i.id} value={i.id}>
+                          {i.name} · {i.region_code}
+                          {i.credential_label ? ` · ${i.credential_label}` : " · no credential"}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={preview}
+                      onChange={(e) => setPreview(e.target.checked)}
+                      className="h-4 w-4"
+                    />
+                    Preview only (first chunk, 100 rows each)
+                  </label>
+                </div>
+
+                <div className="space-y-1.5">
+                  {templates.map((t) => {
+                    const { idx, credId } = sourceFor(t);
+                    const needsCred = idx && !idx.credential_id && !credId;
+                    return (
+                      <div
+                        key={t.id}
+                        className="grid grid-cols-1 gap-2 border border-border p-2 sm:grid-cols-[1fr_1fr_auto]"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium">{t.name}</p>
+                          <p className="font-mono text-xs text-muted-foreground">
+                            {idx ? `${idx.region_code} · ${idx.name}` : "no source picked"}
+                          </p>
+                        </div>
+                        <select
+                          className={fieldClass}
+                          value={indexByTpl[t.id] ?? t.index_target_id ?? ""}
+                          onChange={(e) =>
+                            setIndexByTpl((prev) => ({
+                              ...prev,
+                              [t.id]: e.target.value ? Number(e.target.value) : "",
+                            }))
+                          }
+                          aria-label={`Source for ${t.name}`}
+                        >
+                          <option value="">Pick a source…</option>
+                          {allIndexes?.map((i) => (
+                            <option key={i.id} value={i.id}>
+                              {i.name} · {i.region_code}
+                            </option>
+                          ))}
+                        </select>
+                        {needsCred ? (
+                          <select
+                            className={fieldClass}
+                            value={credByTpl[t.id] ?? t.credential_id ?? ""}
+                            onChange={(e) =>
+                              setCredByTpl((prev) => ({
+                                ...prev,
+                                [t.id]: e.target.value ? Number(e.target.value) : "",
+                              }))
+                            }
+                            aria-label={`Credential for ${t.name}`}
+                          >
+                            <option value="">Credential…</option>
+                            {credentials?.map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {c.label} ({c.org_slug})
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span className="self-center font-mono text-xs text-muted-foreground">
+                            {idx?.credential_label ?? ""}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {run.isError && (
+                <p className="text-xs text-danger">{(run.error as Error).message}</p>
+              )}
+              <div className="flex justify-end gap-2">
+                <Button size="sm" variant="ghost" onClick={onClose}>
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={!validRange || !rowsReady || run.isPending}
+                  onClick={() => run.mutate()}
+                  title={
+                    rowsReady
+                      ? `Queue ${templates.length} jobs`
+                      : "Every row needs a source with a credential"
+                  }
+                >
+                  {run.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  Run {templates.length} job{templates.length === 1 ? "" : "s"}
+                </Button>
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 }

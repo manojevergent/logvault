@@ -453,10 +453,10 @@ export default function JobDetailPage() {
               aria-valuenow={pct}
               aria-valuemin={0}
               aria-valuemax={100}
-              className="h-2 w-full overflow-hidden bg-muted"
+              className="h-4 w-full overflow-hidden bg-muted"
             >
               <div
-                className="h-full bg-primary transition-all duration-300"
+                className="h-full bg-success transition-all duration-300"
                 style={{ width: `${pct}%` }}
               />
             </div>

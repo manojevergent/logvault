@@ -85,19 +85,26 @@ class Last9Client:
         pipeline: list[dict[str, Any]],
         limit: int = DEFAULT_LIMIT,
     ) -> Iterator[LogRow]:
-        """Stream rows for one time window, paging until a short page (§2.8)."""
+        """Stream rows for one time window, paging until a short page (§2.8).
+
+        An empty ``index`` means the org's Default index: Last9 resolves it
+        server-side, and sending any ``index`` value for it (even the UI's
+        "Default" label) 400s with a misleading "parse error: invalid JSON
+        pipeline". So the parameter is omitted, not sent blank.
+        """
         offset = 0
         while True:
-            params = {
+            params: dict[str, Any] = {
                 "start": start,
                 "end": end,
                 "limit": limit,
                 "direction": DEFAULT_DIRECTION,
                 "step": DEFAULT_STEP,
                 "offset": offset,
-                "index": index,
                 "region": region,
             }
+            if index:
+                params["index"] = index
             parsed = self._execute(params, {"pipeline": pipeline})
             page_count = 0
             for stream in _result_streams(parsed):

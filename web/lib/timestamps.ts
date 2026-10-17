@@ -1,6 +1,6 @@
-// Ten is enough to reach for a window you used recently without the list
-// becoming something to scan.
-const RECENT_LIMIT = 10;
+// Five recent windows: enough to re-pick yesterday's range without the Time
+// range section growing past its card.
+const RECENT_LIMIT = 5;
 const KEY = "logvault:recent_ranges";
 
 export type SavedRange = {
@@ -13,7 +13,11 @@ export type SavedRange = {
 export function getRecentRanges(): SavedRange[] {
   if (typeof window === "undefined") return [];
   try {
-    return JSON.parse(localStorage.getItem(KEY) ?? "[]");
+    // Sliced on read too, so lists saved under the old limit shrink at once.
+    return (JSON.parse(localStorage.getItem(KEY) ?? "[]") as SavedRange[]).slice(
+      0,
+      RECENT_LIMIT
+    );
   } catch {
     return [];
   }

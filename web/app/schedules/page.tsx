@@ -16,6 +16,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import * as React from "react";
 import { ImportJsonButton } from "@/components/import-json-button";
+import { TemplatePicker } from "@/components/template-picker";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -496,24 +497,15 @@ function AddScheduleForm({ onDone }: { onDone: () => void }) {
     <Card className="mb-6">
       <CardContent className="grid grid-cols-1 gap-4 p-5 sm:grid-cols-2">
         <Field label="Load a saved search" className="sm:col-span-2">
-          <select
-            className={fieldClass}
+          <TemplatePicker
+            templates={templates ?? []}
             value={templateId}
-            onChange={(e) => {
-              const v = e.target.value ? Number(e.target.value) : "";
+            onPick={(v) => {
               setTemplateId(v);
               const tpl = templates?.find((t) => t.id === v);
               if (tpl) applyTemplate(tpl);
             }}
-          >
-            <option value="">{templates?.length ? "Choose a saved search…" : "No saved searches yet"}</option>
-            {templates?.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-                {t.aggregation?.enabled ? " (with parse & aggregate)" : ""}
-              </option>
-            ))}
-          </select>
+          />
           {templateAggregation?.enabled && (
             <p className="text-xs text-muted-foreground">
               Counts unique <strong>{templateAggregation.unique_fields.join(", ")}</strong>

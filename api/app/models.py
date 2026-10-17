@@ -159,8 +159,17 @@ class User(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(120))
-    hashed_password: Mapped[str] = mapped_column(Text)
+    # NULL for accounts that only ever signed in via Google — the password
+    # login path rejects those explicitly rather than letting passlib choke.
+    hashed_password: Mapped[str | None] = mapped_column(Text, nullable=True)
     role: Mapped[str] = mapped_column(String(20), default="member")  # admin | member
+    # "password" | "google": how the account was created. A password account
+    # that later signs in with Google keeps working both ways.
+    auth_provider: Mapped[str] = mapped_column(String(20), default="password")
+    # Google's stable `sub` for the account, stamped on first Google sign-in.
+    # Lookup key when present, so a changed Gmail address doesn't orphan the
+    # account (or collide with someone else's). NULL until first Google login.
+    oauth_subject: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -186,8 +195,11 @@ class IndexTarget(Base):
 
 
 # "Save the search" — a named phrase/ID/message-type set, loadable into a new
-# job or schedule instead of retyping. Deliberately not tied to a credential,
-# region, or index: the same template applies regardless of source.
+# job or schedule instead of retyping. The filter itself stays source-free (a
+# template applies to any source), but each search remembers the source it was
+# built for — credential, region, index — so batch runs and the wizard come
+# pre-filled instead of asking every time. All three nullable for searches
+# saved before sources were remembered.
 class FilterTemplate(Base):
     __tablename__ = "filter_templates"
 
@@ -196,6 +208,9 @@ class FilterTemplate(Base):
     phrases: Mapped[list] = mapped_column(JSON, default=list)
     ids: Mapped[list] = mapped_column(JSON, default=list)
     message_types: Mapped[list] = mapped_column(JSON, default=list)
+    credential_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    region_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    index_target_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Groups this search's extracts into one folder. Free text, sanitised to a
     # single path segment before it ever reaches the filesystem.
     customer: Mapped[str | None] = mapped_column(String(120), nullable=True)

@@ -13,7 +13,7 @@ from app import audit
 from app.aggregation import validate_aggregation
 from app.database import get_db
 from app.deps import get_current_user
-from app.models import FilterTemplate, User
+from app.models import FilterTemplate, IndexTarget, Last9Credential, User
 from app.schemas import FilterTemplateCreate, FilterTemplateOut
 
 router = APIRouter(prefix="/templates", tags=["templates"])
@@ -43,6 +43,15 @@ _HIDDEN_AGG_DEFAULTS = {
     "timestamp_column": "timestamp_utc",
     "column_labels": {},
 }
+
+
+def _check_source(db: Session, credential_id: int | None, index_target_id: int | None) -> None:
+    """A remembered source must point at rows that still exist — a batch run
+    trusts it blindly, so dangling ids fail here instead of mid-batch."""
+    if credential_id is not None and db.get(Last9Credential, credential_id) is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "unknown credential_id")
+    if index_target_id is not None and db.get(IndexTarget, index_target_id) is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "unknown index_target_id")
 
 
 def _build_aggregation(body: FilterTemplateCreate, prior: dict | None) -> dict | None:
@@ -85,6 +94,7 @@ def create_template(
     user: User = Depends(get_current_user),
 ) -> FilterTemplate:
     agg_dict = _build_aggregation(body, prior=None)
+    _check_source(db, body.credential_id, body.index_target_id)
     tpl = FilterTemplate(
         name=body.name,
         phrases=body.phrases,
@@ -92,6 +102,9 @@ def create_template(
         message_types=body.message_types,
         customer=body.customer.strip() or None,
         aggregation=agg_dict,
+        credential_id=body.credential_id,
+        region_code=body.region_code,
+        index_target_id=body.index_target_id,
     )
     db.add(tpl)
     try:
@@ -120,12 +133,16 @@ def update_template(
     if tpl is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "template not found")
     agg_dict = _build_aggregation(body, prior=tpl.aggregation)
+    _check_source(db, body.credential_id, body.index_target_id)
     tpl.name = body.name
     tpl.phrases = body.phrases
     tpl.ids = body.ids
     tpl.message_types = body.message_types
     tpl.customer = body.customer.strip() or None
     tpl.aggregation = agg_dict
+    tpl.credential_id = body.credential_id
+    tpl.region_code = body.region_code
+    tpl.index_target_id = body.index_target_id
     try:
         db.flush()
         audit.record(

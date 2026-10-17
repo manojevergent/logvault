@@ -63,7 +63,8 @@ class IndexCreate(BaseModel):
     name: str
     region_code: str
     # Defaults to `name` when omitted, which is how targets behaved before the
-    # label and the physical index were separable.
+    # label and the physical index were separable. An explicit blank ("")
+    # selects the org's Default index instead (worker sends no `index` param).
     physical_index: str | None = None
     credential_id: int | None = None
     description: str | None = None
@@ -103,6 +104,11 @@ class FilterTemplateCreate(BaseModel):
     message_types: list[str] = []
     aggregation: AggregationSpec | None = None
     customer: str = ""
+    # Remembered source: the search this was built for. All optional — a
+    # search without one behaves as before (source picked at run time).
+    credential_id: int | None = None
+    region_code: str | None = None
+    index_target_id: int | None = None
 
 
 class FilterTemplateOut(BaseModel):
@@ -115,6 +121,9 @@ class FilterTemplateOut(BaseModel):
     message_types: list[str]
     aggregation: dict | None = None
     customer: str | None = None
+    credential_id: int | None = None
+    region_code: str | None = None
+    index_target_id: int | None = None
     created_by: str | None
     created_at: datetime
 
@@ -284,6 +293,35 @@ class JobExport(BaseModel):
     ids: list[str] = []
     message_types: list[str] = []
     aggregation: AggregationSpec | None = None
+
+
+class BatchItem(BaseModel):
+    """One saved search in a batch run, pinned to its source.
+
+    Each entry may name its own source, or leave it blank to use the search's
+    remembered source (set where the search was built or edited). At least one
+    of the two must resolve, or the batch 422s naming the search.
+    """
+
+    template_id: int
+    credential_id: int | None = None
+    index_target_id: int | None = None
+    region_code: str | None = None
+
+
+class BatchCreate(BaseModel):
+    """Run several saved searches over the same window — e.g. month-end, when
+    every invoice search extracts the same 24h. One job per item, created
+    atomically: any invalid entry 422s the whole batch before anything queues.
+    """
+
+    items: list[BatchItem]
+    start_epoch: int
+    end_epoch: int
+    chunk_hours: int = 1
+    id_batch_size: int = 100
+    output_format: Literal["csv", "jsonl"] = "csv"
+    is_preview: bool = False
 
 
 class RollupCreate(BaseModel):

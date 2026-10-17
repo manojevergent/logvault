@@ -4,6 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { LogOut, Search } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { ApiStatus } from "@/components/api-status";
+import { OPEN_PALETTE_EVENT } from "@/components/command-palette";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { clearToken } from "@/lib/api";
 
@@ -23,13 +24,17 @@ export function Topbar() {
   return (
     <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-border bg-surface/80 px-6 backdrop-blur">
       <div className="flex items-center gap-3 text-sm">
-        <div className="flex items-center gap-2 rounded-md border border-border bg-background px-3 py-1.5 text-muted-foreground">
+        <button
+          type="button"
+          onClick={() => window.dispatchEvent(new Event(OPEN_PALETTE_EVENT))}
+          className="flex items-center gap-2 rounded-md border border-border bg-background px-3 py-1.5 text-muted-foreground transition-colors hover:text-foreground"
+        >
           <Search className="h-3.5 w-3.5" />
-          <span className="text-xs">Search jobs, indexes…</span>
+          <span className="text-xs">Search jobs, saved searches…</span>
           <kbd className="ml-2 hidden rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] sm:inline">
             ⌘K
           </kbd>
-        </div>
+        </button>
       </div>
 
       <div className="flex items-center gap-3">

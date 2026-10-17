@@ -61,6 +61,24 @@ def test_changing_the_physical_index_does_repoint_it(client):
     assert resp.json()["full_index_string"] == "physical_index:OtherService"
 
 
+def test_blank_physical_index_selects_the_org_default(client):
+    """An explicit blank (vs omitted, which derives from the label) targets
+    the org's Default index: Last9 resolves it server-side, so the worker
+    sends no `index` parameter. Verified live — any value 400s."""
+    resp = _create(client, name="TVASAHI", physical_index="")
+    assert resp.status_code == 201
+    saved = resp.json()
+    assert saved["physical_index"] == ""
+    assert saved["full_index_string"] == ""
+
+
+def test_update_to_blank_selects_the_org_default(client):
+    iid = _create(client).json()["id"]
+    resp = client.put(f"/indexes/{iid}", json={"physical_index": ""})
+    assert resp.status_code == 200
+    assert resp.json()["full_index_string"] == ""
+
+
 def test_a_source_carries_its_credential(client, monkeypatch):
     """The point of a profile: one pick supplies region, index and credential."""
     from app.models import Last9Credential

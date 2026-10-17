@@ -1,5 +1,6 @@
-"""Download filenames: a saved file should say which search made it and what
-window it covers, without needing the job id to look anything up."""
+"""Download filenames: a saved file says which search made it, which job ran it,
+and what window it covers. The job id matters because one batch run produces
+several jobs off the same search name and window."""
 
 from __future__ import annotations
 
@@ -28,14 +29,20 @@ def _job(label="AHA_CGetEntitlements", start=None, end=None, fmt="csv") -> Job:
 def test_full_day_is_named_for_the_day_it_covers():
     # Half-open window: 30 Aug 00:00 -> 31 Aug 00:00 covers 30 Aug, and naming it
     # after the exclusive end would label the file with the wrong date.
-    assert download_filename(_job()) == "AHA_CGetEntitlements_2026-08-30.csv.zip"
+    assert download_filename(_job()) == "AHA_CGetEntitlements_16_2026-08-30.csv.zip"
+
+
+def test_filename_carries_the_job_id_after_the_search_name():
+    # Batch runs produce several jobs off one search name + window — the id is
+    # what tells the files apart.
+    assert download_filename(_job()).startswith("AHA_CGetEntitlements_16_")
 
 
 @pytest.mark.parametrize(
     "kind,expected",
     [
-        ("counts", "AHA_CGetEntitlements_2026-08-30_counts.csv.zip"),
-        ("summary", "AHA_CGetEntitlements_2026-08-30_summary.csv.zip"),
+        ("counts", "AHA_CGetEntitlements_16_2026-08-30_counts.csv.zip"),
+        ("summary", "AHA_CGetEntitlements_16_2026-08-30_summary.csv.zip"),
     ],
 )
 def test_each_artifact_keeps_the_same_stem(kind, expected):
@@ -44,12 +51,14 @@ def test_each_artifact_keeps_the_same_stem(kind, expected):
 
 def test_a_partial_day_carries_its_times():
     job = _job(start=_epoch(2026, 8, 31, 7, 5), end=_epoch(2026, 8, 31, 8, 5))
-    assert download_filename(job) == "AHA_CGetEntitlements_2026-08-31_0705-0804.csv.zip"
+    assert download_filename(job) == "AHA_CGetEntitlements_16_2026-08-31_0705-0804.csv.zip"
 
 
 def test_a_window_spanning_days_names_both_ends():
     job = _job(start=_epoch(2026, 8, 30, 9, 0), end=_epoch(2026, 8, 31, 9, 0))
-    assert download_filename(job) == "AHA_CGetEntitlements_2026-08-30_0900-2026-08-31_0859.csv.zip"
+    assert (
+        download_filename(job) == "AHA_CGetEntitlements_16_2026-08-30_0900-2026-08-31_0859.csv.zip"
+    )
 
 
 def test_jsonl_keeps_its_extension():
@@ -76,7 +85,7 @@ def test_characters_that_would_break_a_filename_are_replaced(label):
 
 
 def test_uncompressed_raw_output_has_no_zip_suffix():
-    assert download_filename(_job(), compressed=False) == "AHA_CGetEntitlements_2026-08-30.csv"
+    assert download_filename(_job(), compressed=False) == "AHA_CGetEntitlements_16_2026-08-30.csv"
 
 
 def test_uncompressed_jsonl_has_no_zip_suffix():
@@ -88,4 +97,4 @@ def test_uncompressed_jsonl_has_no_zip_suffix():
 @pytest.mark.parametrize("kind", ["summary", "counts"])
 def test_uncompressed_summary_and_counts_have_no_zip_suffix(kind):
     name = download_filename(_job(), kind, compressed=False)
-    assert name == f"AHA_CGetEntitlements_2026-08-30_{kind}.csv"
+    assert name == f"AHA_CGetEntitlements_16_2026-08-30_{kind}.csv"

@@ -207,7 +207,7 @@ verify_print() {
     local ready
     ready="$(curl -fsS "$API_BASE/ready" 2>/dev/null)" \
         || fail "/ready check failed."
-    ok "api /ready: $(printf '%s' "$READY" | grep -o '"status":"[a-z]*"' | head -1)"
+    ok "api /ready: $(printf '%s' "$ready" | grep -o '"status":"[a-z]*"' | head -1)"
 
     # Both stacks publish the web UI on 3001 (see docker-compose.yml).
     local web_port="3001"

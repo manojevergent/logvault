@@ -86,6 +86,29 @@ For the invoice-API-logs batch (regions, customers, parse rules, schedules),
 follow [LOGVAULT_JOB_SETUP_GUIDE.md](LOGVAULT_JOB_SETUP_GUIDE.md) and
 [INVOICE_API_LOGS_COMPLETE_MAPPING.md](INVOICE_API_LOGS_COMPLETE_MAPPING.md).
 
+### Google sign-in (optional)
+
+Password login works out of the box. To add **Continue with Google** alongside
+it:
+
+1. In the [Google Cloud console](https://console.cloud.google.com/apis/credentials),
+   create an **OAuth client ID** (type: Web application) and add an
+   **Authorized redirect URI** exactly:
+   `{PUBLIC_API_BASE_URL}/auth/google/callback`
+   (default `http://localhost:8000/auth/google/callback`).
+2. Set in `.env` and restart (no rebuild needed — these are runtime settings):
+   `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and preferably
+   `GOOGLE_ALLOWED_DOMAINS` (e.g. your Workspace domain; empty allows any
+   verified Google account).
+3. The login page shows the Google button automatically once configured
+   (`GET /auth/providers`).
+
+Behavior notes: first Google sign-in creates a `member` account (or `admin`
+if the users table is empty); an existing password account that signs in with
+the same email gets linked and keeps working both ways; linking never changes
+roles — admins promote via Admin → Users. Sessions are the same 24h JWTs as
+password login.
+
 ### Uniform CSV columns
 
 Every extract can emit the same columns in the same order: in the Parse

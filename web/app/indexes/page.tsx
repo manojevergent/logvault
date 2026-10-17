@@ -39,7 +39,8 @@ export default function IndexesPage() {
           <h1 className="text-xl font-semibold tracking-tight">Indexes</h1>
           <p className="text-sm text-muted-foreground">
             Named index targets scoped to a region. The full string is derived as{" "}
-            <span className="font-mono">physical_index:&lt;name&gt;</span>.
+            <span className="font-mono">physical_index:&lt;name&gt;</span> — or leave
+            the index blank to query the org&rsquo;s Default index.
           </p>
         </div>
         <Button onClick={() => setAdding((v) => !v)} variant={adding ? "outline" : "primary"}>
@@ -102,6 +103,7 @@ function IndexRow({
   const [editing, setEditing] = React.useState(false);
   const [name, setName] = React.useState(idx.name);
   const [physical, setPhysical] = React.useState(idx.physical_index ?? idx.name);
+  const [useDefault, setUseDefault] = React.useState(!idx.full_index_string);
   const [credentialId, setCredentialId] = React.useState<number | "">(idx.credential_id ?? "");
   const [description, setDescription] = React.useState(idx.description ?? "");
   const { data: credentials } = useQuery({ queryKey: ["credentials"], queryFn: listCredentials });
@@ -110,7 +112,9 @@ function IndexRow({
     mutationFn: () =>
       updateIndex(idx.id, {
         name,
-        physical_index: physical.trim() || name.trim(),
+        // Blank selects the org's Default index; otherwise a blank falls back
+        // to the label, as before.
+        physical_index: useDefault ? "" : physical.trim() || name.trim(),
         credential_id: credentialId === "" ? null : Number(credentialId),
         description,
       }),
@@ -135,7 +139,21 @@ function IndexRow({
           </div>
           <div className="space-y-1.5">
             <Label>Last9 index</Label>
-            <Input value={physical} onChange={(e) => setPhysical(e.target.value)} />
+            <Input
+              value={physical}
+              onChange={(e) => setPhysical(e.target.value)}
+              disabled={useDefault}
+              placeholder={useDefault ? "Default (org default)" : undefined}
+            />
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={useDefault}
+                onChange={(e) => setUseDefault(e.target.checked)}
+                className="h-3.5 w-3.5"
+              />
+              Query the org&rsquo;s Default index
+            </label>
           </div>
           <div className="space-y-1.5">
             <Label>Credential</Label>
@@ -171,9 +189,12 @@ function IndexRow({
             <span className="font-medium">{idx.name}</span>
             <Badge tone="info">{regionLabel}</Badge>
           </div>
-          <p className="font-mono text-xs text-muted-foreground">{idx.full_index_string}</p>
           <p className="font-mono text-xs text-muted-foreground">
-            index {idx.physical_index ?? idx.name}
+            {idx.full_index_string || "(org default index — no index parameter sent)"}
+          </p>
+          <p className="font-mono text-xs text-muted-foreground">
+            index{" "}
+            {idx.physical_index || (idx.full_index_string ? idx.name : "Default (org default)")}
             {idx.credential_label ? ` · ${idx.credential_label}` : " · no credential set"}
           </p>
           {idx.description && <p className="text-xs text-muted-foreground">{idx.description}</p>}
@@ -212,14 +233,15 @@ function AddIndexForm({ regions, onDone }: { regions: Region[]; onDone: () => vo
     credential_id: "" as number | "",
     description: "",
   });
+  const [useDefault, setUseDefault] = React.useState(false);
 
   const create = useMutation({
     mutationFn: () =>
       createIndex({
         ...form,
-        // Blank means "same as the label", which is how targets behaved before
-        // the two were separable.
-        physical_index: form.physical_index.trim() || form.name.trim(),
+        // Default-index targets send a blank; otherwise a blank still means
+        // "same as the label", as before.
+        physical_index: useDefault ? "" : form.physical_index.trim() || form.name.trim(),
         credential_id: form.credential_id === "" ? null : Number(form.credential_id),
       }),
     onSuccess: () => {
@@ -269,7 +291,17 @@ function AddIndexForm({ regions, onDone }: { regions: Region[]; onDone: () => vo
               value={form.physical_index}
               onChange={(e) => setForm({ ...form, physical_index: e.target.value })}
               placeholder="UMServices"
+              disabled={useDefault}
             />
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={useDefault}
+                onChange={(e) => setUseDefault(e.target.checked)}
+                className="h-3.5 w-3.5"
+              />
+              Query the org&rsquo;s Default index instead
+            </label>
             <p className="text-xs text-muted-foreground">
               The real index name. Defaults to the label; keep them separate so
               renaming the label can&rsquo;t repoint the source.

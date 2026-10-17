@@ -1,7 +1,10 @@
 """Index targets CRUD + regions list.
 
 The index dropdown is region-dependent: GET /indexes?region=<code> returns only
-that region's targets. full_index_string is derived as physical_index:<name>.
+that region's targets. full_index_string is derived as physical_index:<name>,
+except an explicitly blank physical index means the org's Default index: Last9
+resolves it server-side, so the worker sends no `index` parameter at all (any
+value 400s). Omitted (None) still derives from the label, as before.
 """
 
 from __future__ import annotations
@@ -59,6 +62,11 @@ def _check_credential(db: Session, credential_id: int | None) -> None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "unknown credential_id")
 
 
+def full_for(physical: str) -> str:
+    """The query string for a physical index name — "" for the org Default."""
+    return f"physical_index:{physical}" if physical else ""
+
+
 @router.post("/indexes", response_model=IndexOut, status_code=status.HTTP_201_CREATED)
 def create_index(
     body: IndexCreate,
@@ -68,14 +76,16 @@ def create_index(
     if body.region_code not in REGIONS:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "unknown region_code")
     _check_credential(db, body.credential_id)
-    physical = (body.physical_index or body.name).strip()
+    # None (omitted) derives from the label; an explicit blank selects the
+    # org's Default index (full string "" => worker omits `index`).
+    physical = body.name.strip() if body.physical_index is None else body.physical_index.strip()
     idx = IndexTarget(
         name=body.name,
         region_code=body.region_code,
         physical_index=physical,
         # Derived from the PHYSICAL index, never the label — the label is free
         # text and renaming it must not repoint the target.
-        full_index_string=f"physical_index:{physical}",
+        full_index_string=full_for(physical),
         credential_id=body.credential_id,
         description=body.description,
     )
@@ -147,7 +157,7 @@ def update_index(index_id: int, body: IndexUpdate, db: Session = Depends(get_db)
         idx.name = body.name  # label only — see create_index
     if body.physical_index is not None:
         idx.physical_index = body.physical_index.strip()
-        idx.full_index_string = f"physical_index:{idx.physical_index}"
+        idx.full_index_string = full_for(idx.physical_index)
     if body.credential_id is not None:
         _check_credential(db, body.credential_id)
         idx.credential_id = body.credential_id

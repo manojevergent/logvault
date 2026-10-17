@@ -268,6 +268,59 @@ def test_update_does_not_preserve_raw_columns_or_include_message(client):
     assert saved["include_message"] is True
 
 
+def test_template_round_trips_its_remembered_source(client):
+    """The source a search was built for comes back with it, so batch runs
+    and the wizard pre-fill instead of asking every time."""
+    from app.models import IndexTarget, Last9Credential
+
+    db = client.session_factory()
+    db.add(
+        Last9Credential(
+            id=11,
+            label="sg",
+            org_slug="evergentapse1",
+            encrypted_refresh_token="x",
+            refresh_token_last4="abcd",
+        )
+    )
+    db.add(
+        IndexTarget(
+            id=12,
+            name="UMServices",
+            region_code="ap-southeast-1",
+            full_index_string="physical_index:UMServices",
+            credential_id=11,
+        )
+    )
+    db.commit()
+    db.close()
+
+    resp = client.post(
+        "/templates",
+        json={
+            "name": "SG search",
+            "phrases": ["ClassName"],
+            "credential_id": 11,
+            "region_code": "ap-southeast-1",
+            "index_target_id": 12,
+        },
+    )
+    assert resp.status_code == 201
+    saved = resp.json()
+    assert (saved["credential_id"], saved["region_code"], saved["index_target_id"]) == (
+        11,
+        "ap-southeast-1",
+        12,
+    )
+
+    # Unknown ids fail at save, not mid-batch.
+    bad = client.post(
+        "/templates",
+        json={"name": "bad", "phrases": ["x"], "credential_id": 999},
+    )
+    assert bad.status_code == 422
+
+
 def test_update_can_still_change_a_hidden_field_via_a_direct_api_call(client):
     """The preservation above only kicks in when the submitted value sits at
     the schema default — a deliberate non-default value still takes effect."""

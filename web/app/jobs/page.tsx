@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   ArrowRight,
@@ -27,11 +27,14 @@ import {
   downloadJson,
   exportJob,
   importJob,
+  listJobs,
 } from "@/lib/api";
 import { isActive, useJobs } from "@/lib/use-jobs";
 import { Tz, formatDuration, formatEpoch, formatRange, useTz } from "@/lib/time";
 
-const STATUS_TABS: Array<"all" | JobStatus> = [
+type Tab = "all" | "previews" | JobStatus;
+
+const STATUS_TABS: Array<Tab> = [
   "all",
   "running",
   "queued",
@@ -39,6 +42,7 @@ const STATUS_TABS: Array<"all" | JobStatus> = [
   "completed",
   "failed",
   "canceled",
+  "previews",
 ];
 
 const PAGE_LIMIT = 200;
@@ -53,12 +57,20 @@ function extractionName(job: Job): string | null {
 
 export default function JobsPage() {
   const [search, setSearch] = React.useState("");
-  const [tab, setTab] = React.useState<"all" | JobStatus>("all");
+  const [tab, setTab] = React.useState<Tab>("all");
   const [tz, setTz] = useTz();
   const searchRef = React.useRef<HTMLInputElement>(null);
   const qc = useQueryClient();
 
   const { data: jobs, isLoading, error, refetch, isFetching } = useJobs(PAGE_LIMIT);
+  // Filter-test previews live outside the main list (they would drown it —
+  // every Test filter click is a job row), fetched only while this tab is open.
+  const { data: previewJobs } = useQuery({
+    queryKey: ["jobs", "previews", PAGE_LIMIT],
+    queryFn: () => listJobs(PAGE_LIMIT, true).then((js) => js.filter((j) => j.is_preview)),
+    enabled: tab === "previews",
+    staleTime: 5_000,
+  });
 
   // Only active jobs are cancelable, so selection is scoped to them.
   const [selected, setSelected] = React.useState<Set<number>>(new Set());
@@ -131,8 +143,9 @@ export default function JobsPage() {
   }, []);
 
   const filtered = React.useMemo(() => {
-    if (!jobs) return jobs;
-    let list = tab === "all" ? jobs : jobs.filter((j) => j.status === tab);
+    const base = tab === "previews" ? previewJobs : jobs;
+    if (!base) return base;
+    let list = tab === "all" || tab === "previews" ? base : base.filter((j) => j.status === tab);
     if (search.trim()) {
       const q = search.toLowerCase();
       list = list.filter(
@@ -144,7 +157,7 @@ export default function JobsPage() {
       );
     }
     return list;
-  }, [jobs, search, tab]);
+  }, [jobs, previewJobs, search, tab]);
 
   const counts = React.useMemo(() => {
     if (!jobs) return {} as Record<string, number>;
@@ -240,7 +253,12 @@ export default function JobsPage() {
       {/* Status tabs */}
       <div className="flex flex-wrap gap-1 pb-3">
         {STATUS_TABS.map((s) => {
-          const count = s === "all" ? (jobs?.length ?? 0) : (counts[s] ?? 0);
+          const count =
+            s === "all"
+              ? (jobs?.length ?? 0)
+              : s === "previews"
+                ? (previewJobs?.length ?? 0)
+                : (counts[s] ?? 0);
           const active = tab === s;
           return (
             <button
