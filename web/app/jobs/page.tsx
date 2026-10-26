@@ -10,6 +10,7 @@ import {
   Loader2,
   Plus,
   Search,
+  Trash2,
   X,
 } from "lucide-react";
 import Link from "next/link";
@@ -24,6 +25,7 @@ import {
   JobExport,
   JobStatus,
   bulkCancelJobs,
+  deleteJobFiles,
   downloadJson,
   exportJob,
   importJob,
@@ -516,6 +518,17 @@ const JobRow = React.memo(function JobRow({
   const started = job.started_at ? Date.parse(job.started_at) : null;
   const finished = job.finished_at ? Date.parse(job.finished_at) : null;
   const ran = started && finished ? (finished - started) / 1000 : null;
+  const hasFiles = Boolean(job.has_output || job.has_summary || job.has_counts || job.download_url);
+
+  const qc = useQueryClient();
+  const [confirmDelete, setConfirmDelete] = React.useState(false);
+  const delFiles = useMutation({
+    mutationFn: () => deleteJobFiles(job.id),
+    onSuccess: () => {
+      setConfirmDelete(false);
+      qc.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
   return (
     <tr className={`hover:bg-accent/40 ${selected ? "bg-accent/30" : ""}`}>
       <td className="px-3 py-1.5">
@@ -563,11 +576,45 @@ const JobRow = React.memo(function JobRow({
         <div className="flex items-center justify-end gap-1.5">
           {job.download_url && (
             <a href={`${API_BASE}${job.download_url}`} aria-label={`Download job ${job.id}`}>
-              <Button size="icon" variant="ghost">
+              <Button size="icon" variant="ghost" title={`Download ${job.output_format.toUpperCase()}`}>
                 <Download className="h-4 w-4" />
               </Button>
             </a>
           )}
+          {hasFiles &&
+            (confirmDelete ? (
+              <div className="flex items-center gap-1 rounded border border-danger/60 bg-muted px-1.5 py-0.5">
+                <span className="text-[11px] font-medium text-danger">Delete files?</span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-5 px-1.5 text-xs text-danger hover:bg-danger/20"
+                  onClick={() => delFiles.mutate()}
+                  disabled={delFiles.isPending}
+                >
+                  {delFiles.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Yes"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-5 px-1.5 text-xs text-muted-foreground"
+                  onClick={() => setConfirmDelete(false)}
+                >
+                  No
+                </Button>
+              </div>
+            ) : (
+              <Button
+                size="icon"
+                variant="ghost"
+                aria-label={`Delete files for job ${job.id}`}
+                title="Delete extracted output files from disk"
+                className="hover:text-danger"
+                onClick={() => setConfirmDelete(true)}
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            ))}
           <Button
             size="icon"
             variant="ghost"

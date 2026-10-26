@@ -17,6 +17,7 @@ def _job(**agg_over):
         "start_epoch": 0,
         "end_epoch": 7200,
         "phrases": ["ClassName"],
+        "label": "TEST_SEARCH",
     }
     agg = {
         "enabled": True,

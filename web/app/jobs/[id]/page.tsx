@@ -289,6 +289,10 @@ export default function JobDetailPage() {
     return <div className="px-6 py-8 text-sm text-muted-foreground">Loading…</div>;
   }
 
+  const hasAnyFiles = Boolean(
+    job.has_output || job.has_summary || job.has_counts || job.download_url
+  );
+
   const expiry = downloadExpiry(
     job.finished_at,
     settings?.download_url_ttl_seconds ?? DEFAULT_DOWNLOAD_TTL_SEC,
@@ -377,18 +381,6 @@ export default function JobDetailPage() {
               <Copy className="h-3.5 w-3.5" /> Clone
             </Button>
           </Link>
-          {(job.has_output || job.has_summary || job.has_counts) && !confirmDeleteFiles && (
-            <Button
-              size="sm"
-              variant="outline"
-              className="border-danger/50 text-danger hover:bg-danger/10 hover:text-danger"
-              onClick={() => setConfirmDeleteFiles(true)}
-              title="Delete extracted output files from disk"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-              Delete files
-            </Button>
-          )}
           {/* An expired link 404s at the API, so the button stops being a
               button rather than sending you to a raw error page. */}
           {job.download_url &&
@@ -408,6 +400,18 @@ export default function JobDetailPage() {
                 </Button>
               </a>
             ))}
+          {hasAnyFiles && !confirmDeleteFiles && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-danger/50 text-danger hover:bg-danger/10 hover:text-danger"
+              onClick={() => setConfirmDeleteFiles(true)}
+              title="Delete extracted output files from disk"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Delete files
+            </Button>
+          )}
         </div>
       </div>
 
