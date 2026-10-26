@@ -135,11 +135,15 @@ export default function NewJobPage() {
   const [templateId, setTemplateId] = React.useState<number | "">("");
   const [savingTemplate, setSavingTemplate] = React.useState(false);
   const [templateName, setTemplateName] = React.useState("");
+  // Mandatory search name / extraction label: every extraction requires a name
+  // so extracted files are always identifiable on disk and downloads.
+  const [searchLabel, setSearchLabel] = React.useState("");
   // Groups this job's output files under exports/<customer>/. Comes from the
   // saved search when one is loaded, and is editable for a one-off run.
   const [customer, setCustomer] = React.useState("");
 
   function applyTemplate(tpl: FilterTemplate) {
+    setSearchLabel(tpl.name);
     setPhrases(tpl.phrases);
     setIdsText(tpl.ids.join("\n"));
     setMessageTypesText(tpl.message_types.join("\n"));
@@ -458,6 +462,8 @@ export default function NewJobPage() {
 
   React.useEffect(() => {
     if (!cloneJob) return;
+    setSearchLabel(cloneJob.filter_spec.label ?? "");
+    setCustomer(cloneJob.filter_spec.customer ?? "");
     setCredentialId(cloneJob.credential_id);
     setRegion(cloneJob.region_code);
     setIndexId(cloneJob.index_target_id);
@@ -546,7 +552,12 @@ export default function NewJobPage() {
   const hasSomethingToSave = savedParts.length > 0;
 
   const canRun =
-    effectiveCredentialId !== "" && indexId !== "" && validRange && pipeline !== null && aggValid;
+    effectiveCredentialId !== "" &&
+    indexId !== "" &&
+    validRange &&
+    pipeline !== null &&
+    aggValid &&
+    searchLabel.trim() !== "";
 
   const create = useMutation({
     mutationFn: (preview: boolean) =>
@@ -563,8 +574,8 @@ export default function NewJobPage() {
         message_types: messageTypes,
         output_format: format,
         is_preview: preview,
-        // Names the downloads after the search rather than a job number.
-        label: templates?.find((t) => t.id === templateId)?.name ?? "",
+        // Mandatory extraction label: names output files <search_name>_<job_id>_<timeframe>.csv.zip
+        label: searchLabel.trim(),
         customer,
         aggregation: aggEnabled
           ? {
@@ -807,6 +818,23 @@ export default function NewJobPage() {
 
         {/* 4. Filter builder */}
         <Section title="Filter">
+          <div className="space-y-1.5 sm:col-span-2">
+            <Label>
+              Extraction Label / Search Name <span className="text-danger">*</span>
+            </Label>
+            <Input
+              value={searchLabel}
+              onChange={(e) => setSearchLabel(e.target.value)}
+              placeholder="e.g. INVOICE_ABSCBN_NV"
+              required
+            />
+            {!searchLabel.trim() && (
+              <p className="text-xs text-danger">
+                Mandatory: every extraction requires a search name to name its output files.
+              </p>
+            )}
+          </div>
+
           <div className="flex flex-wrap items-end gap-3 sm:col-span-2">
             <div className="min-w-[220px] flex-1 space-y-1.5">
               <Label>Load a saved search</Label>
@@ -850,7 +878,10 @@ export default function NewJobPage() {
                 // A parse pattern alone is worth saving — it is the laborious
                 // part, and it stands on its own without any filter.
                 disabled={!hasSomethingToSave}
-                onClick={() => setSavingTemplate(true)}
+                onClick={() => {
+                  setTemplateName(searchLabel);
+                  setSavingTemplate(true);
+                }}
                 title="Save the current filters and parse pattern as a reusable search"
               >
                 <Bookmark className="h-3.5 w-3.5" />

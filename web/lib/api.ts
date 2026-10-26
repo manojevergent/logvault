@@ -354,6 +354,7 @@ export const pauseJob = (id: number) => req<Job>(`/jobs/${id}/pause`, { method: 
 export const resumeJob = (id: number) => req<Job>(`/jobs/${id}/resume`, { method: "POST" });
 export const cancelJob = (id: number) => req<Job>(`/jobs/${id}/cancel`, { method: "POST" });
 export const retryJob = (id: number) => req<Job>(`/jobs/${id}/retry`, { method: "POST" });
+export const deleteJobFiles = (id: number) => req<Job>(`/jobs/${id}/files`, { method: "DELETE" });
 
 export type BulkCancelResult = {
   canceled: number[];

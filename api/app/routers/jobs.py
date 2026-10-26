@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import re
@@ -213,6 +214,10 @@ def create_job(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> JobOut:
+    if not body.label or not body.label.strip():
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "Search Name / Extraction Label is required"
+        )
     agg = body.aggregation.model_dump() if body.aggregation else None
     _validate_agg_dict(agg)
 
@@ -647,6 +652,49 @@ def cancel_job(
         raise HTTPException(status.HTTP_409_CONFLICT, f"job already {job.status}")
     job.status = "canceled"  # running worker finalizes partial output; queued never starts
     audit.record(db, "cancel", "job", job_id, user_id=user.email)
+    db.commit()
+    db.refresh(job)
+    return _to_out(job, credential_label=_cred_label(db, job.credential_id))
+
+
+@router.delete("/{job_id}/files", response_model=JobOut)
+def delete_job_files(
+    job_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> JobOut:
+    """Delete extracted output files (CSV/ZIP, summary, counts) for a job from disk."""
+    job = _get_or_404(db, job_id)
+    if job.status in ("queued", "running", "paused"):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"cannot delete files of an active/paused job (status: {job.status})",
+        )
+
+    paths_to_remove = [
+        job.output_file_path,
+        job.summary_file_path,
+        job.counts_file_path,
+    ]
+
+    for file_path in paths_to_remove:
+        if file_path:
+            candidates = {file_path}
+            if file_path.endswith(".zip"):
+                candidates.add(file_path[:-4])
+            else:
+                candidates.add(f"{file_path}.zip")
+            for path in candidates:
+                if os.path.exists(path):
+                    with contextlib.suppress(OSError):
+                        os.remove(path)
+
+    job.output_file_path = None
+    job.summary_file_path = None
+    job.counts_file_path = None
+
+    db.add(JobEvent(job_id=job.id, message="Extracted output files deleted from disk"))
+    audit.record(db, "delete_files", "job", job.id, user_id=user.email)
     db.commit()
     db.refresh(job)
     return _to_out(job, credential_label=_cred_label(db, job.credential_id))

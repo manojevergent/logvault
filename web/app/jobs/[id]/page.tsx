@@ -11,6 +11,7 @@ import {
   Play,
   PlayCircle,
   RefreshCw,
+  Trash2,
 } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
@@ -24,6 +25,7 @@ import {
   Job,
   cancelJob,
   createJob,
+  deleteJobFiles,
   getJob,
   getSettings,
   pauseJob,
@@ -241,9 +243,20 @@ export default function JobDetailPage() {
       window.location.href = `/jobs/${newJob.id}`;
     },
   });
-  // A rejected pause/resume/cancel/retry used to look exactly like an applied
+  const [confirmDeleteFiles, setConfirmDeleteFiles] = React.useState(false);
+
+  const deleteFiles = useMutation({
+    mutationFn: () => deleteJobFiles(id),
+    onSuccess: () => {
+      setConfirmDeleteFiles(false);
+      qc.invalidateQueries({ queryKey: ["jobs"] });
+      refresh();
+    },
+  });
+
+  // A rejected pause/resume/cancel/retry/deleteFiles used to look exactly like an applied
   // one — the button just went back to normal.
-  const actionError = ([pause, resume, cancel, retry, runFull].find((m) => m.isError)?.error ??
+  const actionError = ([pause, resume, cancel, retry, runFull, deleteFiles].find((m) => m.isError)?.error ??
     null) as Error | null;
 
   // A 404, a 403 or an API outage used to sit on "Loading…" forever.
@@ -364,6 +377,18 @@ export default function JobDetailPage() {
               <Copy className="h-3.5 w-3.5" /> Clone
             </Button>
           </Link>
+          {(job.has_output || job.has_summary || job.has_counts) && !confirmDeleteFiles && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-danger/50 text-danger hover:bg-danger/10 hover:text-danger"
+              onClick={() => setConfirmDeleteFiles(true)}
+              title="Delete extracted output files from disk"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Delete files
+            </Button>
+          )}
           {/* An expired link 404s at the API, so the button stops being a
               button rather than sending you to a raw error page. */}
           {job.download_url &&
@@ -413,6 +438,32 @@ export default function JobDetailPage() {
             <Button size="sm" onClick={() => cancel.mutate()} disabled={cancel.isPending}>
               {cancel.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               Yes, cancel
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {confirmDeleteFiles && (
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3 border border-danger bg-muted px-4 py-3">
+          <p className="text-sm">
+            Delete output files for Job #{job.id} from disk?{" "}
+            <span className="text-muted-foreground">
+              All extracted CSV and summary files stored on disk for this job will be permanently removed. The job record itself remains in history.
+            </span>
+          </p>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button size="sm" variant="ghost" onClick={() => setConfirmDeleteFiles(false)}>
+              Keep files
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-danger/50 text-danger hover:bg-danger/10 hover:text-danger"
+              onClick={() => deleteFiles.mutate()}
+              disabled={deleteFiles.isPending}
+            >
+              {deleteFiles.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              Yes, delete files
             </Button>
           </div>
         </div>

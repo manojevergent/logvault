@@ -534,12 +534,12 @@ def run_extraction(job_id: int) -> None:
             with eng.begin() as conn:
                 db.add_event(conn, job_id, f"BigQuery load failed: {exc}", level="warn")
 
-    # Compress raw output and summaries to save space
+    # Compress raw output and summaries to save space (full extractions only)
     if f is not None and not is_preview:
         path = _zip_file(path)
-    if summary is not None:
+    if summary is not None and not is_preview:
         summary = _zip_file(summary)
-    if counts is not None:
+    if counts is not None and not is_preview:
         counts = _zip_file(counts)
 
     with eng.begin() as conn:

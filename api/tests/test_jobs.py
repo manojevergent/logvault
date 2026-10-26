@@ -21,6 +21,7 @@ def _create(client, monkeypatch, **over):
         "end_epoch": 7200,
         "phrases": ["GetEntitlements"],
         "ids": ["ID-A", "ID-B"],
+        "label": "TEST_SEARCH",
     }
     body.update(over)
     return client.post("/jobs", json=body)
@@ -35,8 +36,63 @@ def test_create_queues_job_and_stores_filter(client, monkeypatch):
         "phrases": ["GetEntitlements"],
         "ids": ["ID-A", "ID-B"],
         "message_types": [],
+        "label": "TEST_SEARCH",
     }
     assert data["download_url"] is None
+
+
+def test_create_requires_non_empty_label(client, monkeypatch):
+    monkeypatch.setattr(jobs_router, "dispatch_job", lambda _id: None)
+    resp = client.post(
+        "/jobs",
+        json={
+            "credential_id": 1,
+            "index_target_id": 1,
+            "region_code": "ap-southeast-1",
+            "start_epoch": 0,
+            "end_epoch": 7200,
+            "phrases": ["GetEntitlements"],
+            "label": "",
+        },
+    )
+    assert resp.status_code == 422
+    assert "Search Name" in resp.json()["detail"]
+
+
+def test_delete_job_files_deletes_files_and_clears_db_paths(client, monkeypatch, tmp_path):
+    jid = _create(client, monkeypatch).json()["id"]
+    out_file = tmp_path / "out.csv.zip"
+    summary_file = tmp_path / "summary.csv.zip"
+    out_file.write_bytes(b"zip1")
+    summary_file.write_bytes(b"zip2")
+
+    with client.session_factory() as db:
+        job = db.get(Job, jid)
+        job.status = "completed"
+        job.output_file_path = str(out_file)
+        job.summary_file_path = str(summary_file)
+        db.commit()
+
+    # Active job cannot delete files
+    with client.session_factory() as db:
+        job = db.get(Job, jid)
+        job.status = "running"
+        db.commit()
+    assert client.delete(f"/jobs/{jid}/files").status_code == 409
+
+    # Completed job deletes files
+    with client.session_factory() as db:
+        job = db.get(Job, jid)
+        job.status = "completed"
+        db.commit()
+
+    resp = client.delete(f"/jobs/{jid}/files")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["has_output"] is False
+    assert data["has_summary"] is False
+    assert not out_file.exists()
+    assert not summary_file.exists()
 
 
 def test_control_transitions(client, monkeypatch):
