@@ -204,6 +204,7 @@ def run_extraction(job_id: int) -> None:
         idx = dict(idx)
 
     settings = get_settings()
+    excel_escape = settings.excel_escape
     spec = ExtractionSpec(
         region=job["region_code"],
         index=idx["full_index_string"],
@@ -257,6 +258,8 @@ def run_extraction(job_id: int) -> None:
                 include_message=agg_config.get("include_message", True),
                 timestamp_column=agg_config.get("timestamp_column", "timestamp_utc"),
                 column_labels=agg_config.get("column_labels", {}),
+                # Deployment-wide switch: off = warehouse-ready plain values.
+                excel_escape=settings.excel_escape,
             )
             matcher = None
             if agg_spec.use_library:
@@ -421,11 +424,13 @@ def run_extraction(job_id: int) -> None:
                 else:
                     bq_unmatched += 1
             else:
-                # Excel auto-parses a bare "YYYY-MM-DD HH:MM:SS.mmm" cell as a
-                # date, which reformats it to the sheet's locale and rounds away
-                # the milliseconds — `="..."` keeps it literal text, exactly as
-                # written, the same trick already used for numeric id columns.
-                cols = [f'="{ts}"']
+                # EXCEL_ESCAPE only: Excel auto-parses a bare
+                # "YYYY-MM-DD HH:MM:SS.mmm" cell as a date, reformatting it to
+                # the sheet's locale and dropping the milliseconds, so the
+                # `="..."` wrapper is used to keep it literal. It is left off by
+                # default because those quotes and the `=` are real data: a
+                # warehouse loading this CSV ingests `="2026-10-26 ..."`.
+                cols = [f'="{ts}"' if excel_escape else ts]
                 if aggregator is not None:
                     # A row the pattern didn't match still gets its columns, left
                     # blank — dropping it here would make the file disagree with

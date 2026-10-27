@@ -27,12 +27,20 @@ def store(tmp_path):
     s.close()
 
 
-def agg_at(path, *, group_by=(), unique_fields=("spid",), fresh=False, regex=PATTERN):
+def agg_at(
+    path, *, group_by=(), unique_fields=("spid",), fresh=False, regex=PATTERN, excel_escape=False
+):
     """An Aggregator over a store at `path` — reopening the same path is what
     'resume' means now, so tests can do it directly."""
     s = DistinctStore(str(path), fresh=fresh)
     return Aggregator(
-        AggregationSpec(regex=regex, group_by=list(group_by), unique_fields=list(unique_fields)), s
+        AggregationSpec(
+            regex=regex,
+            group_by=list(group_by),
+            unique_fields=list(unique_fields),
+            excel_escape=excel_escape,
+        ),
+        s,
     )
 
 
@@ -121,7 +129,13 @@ def test_columns_are_the_aggregated_fields_plus_the_matching_format(store):
     """Not every named group: with a library of hundreds of formats that would
     be hundreds of columns, and the header is written before the first row."""
     agg = Aggregator(
-        AggregationSpec(regex=PATTERN, group_by=["api", "BU"], unique_fields=["spid"]), store
+        AggregationSpec(
+            regex=PATTERN,
+            group_by=["api", "BU"],
+            unique_fields=["spid"],
+            excel_escape=True,
+        ),
+        store,
     )
     assert agg.parsed_fields == ["log_format", "api", "BU", "spid"]
 
@@ -134,12 +148,29 @@ def test_columns_are_the_aggregated_fields_plus_the_matching_format(store):
     ]
 
 
+def test_warehouse_default_emits_plain_values_with_no_excel_wrapper(store):
+    """EXCEL_ESCAPE is off by default: `="..."` is literal data to a warehouse."""
+    agg = Aggregator(
+        AggregationSpec(regex=PATTERN, group_by=["api", "BU"], unique_fields=["spid"]),
+        store,
+    )
+    assert agg.excel_escape is False
+    assert agg.process(LINE) == ["pattern", "CGetEntitlementsCommand", "AHA INDIA", "2112091"]
+    # And the raw value survives untouched, digits and all.
+    long_id = "230702032635917346995349"
+    assert agg.process(LINE.replace("2112091", long_id))[-1] == long_id
+
+
 def test_include_log_format_false_drops_the_leading_column(store):
     """A deliverable of parsed fields only, no format tag — the common case
     for a single ad-hoc regex where there's only ever one format anyway."""
     agg = Aggregator(
         AggregationSpec(
-            regex=PATTERN, group_by=["api", "BU"], unique_fields=["spid"], include_log_format=False
+            regex=PATTERN,
+            group_by=["api", "BU"],
+            unique_fields=["spid"],
+            include_log_format=False,
+            excel_escape=True,
         ),
         store,
     )
@@ -157,6 +188,7 @@ def test_include_log_format_does_not_affect_an_explicit_raw_columns_list(store):
             unique_fields=["spid"],
             raw_columns=["api", "spid"],
             include_log_format=True,
+            excel_escape=True,
         ),
         store,
     )
@@ -177,6 +209,7 @@ def test_uniform_layout_orders_columns_and_renames_headers(store):
             column_labels={"spid": "spAccountID", "BU": "bu_name"},
             timestamp_column="timestamp",
             include_log_format=False,
+            excel_escape=True,
         ),
         store,
     )
@@ -204,7 +237,12 @@ def test_process_counts_each_row_once(store):
 
 def test_summary_csv_guards_long_numeric_group_values(tmp_path):
     long_id = "260502053603972127523"
-    agg = agg_at(tmp_path / "job.sqlite", group_by=["spid"], unique_fields=["trackerid"])
+    agg = agg_at(
+        tmp_path / "job.sqlite",
+        group_by=["spid"],
+        unique_fields=["trackerid"],
+        excel_escape=True,
+    )
     agg.feed(LINE.replace("2112091", long_id))
 
     out = tmp_path / "summary.csv"
@@ -339,7 +377,12 @@ def test_summary_csv_has_a_row_per_group_and_a_column_per_unique_field(tmp_path)
 def test_value_counts_csv_carries_the_group_columns(tmp_path):
     """Each row has to say which BU the value belongs to — a bare value/count
     pair can't be attributed to a customer."""
-    agg = agg_at(tmp_path / "job.sqlite", group_by=["api", "BU"], unique_fields=["spid"])
+    agg = agg_at(
+        tmp_path / "job.sqlite",
+        group_by=["api", "BU"],
+        unique_fields=["spid"],
+        excel_escape=True,
+    )
     agg.feed(LINE)  # AHA INDIA, spid 2112091
     agg.feed(LINE)  # same spid again -> count 2
     agg.feed(LINE.replace("AHA INDIA", "AHA US").replace("2112091", "9001"))
@@ -353,4 +396,16 @@ def test_value_counts_csv_carries_the_group_columns(tmp_path):
     # Most frequent first.
     assert rows[1] == ['="2112091"', "CGetEntitlementsCommand", "AHA INDIA", "2"]
     assert rows[2] == ['="9001"', "CGetEntitlementsCommand", "AHA US", "1"]
+    agg.store.close()
+
+
+def test_value_counts_csv_is_plain_by_default(tmp_path):
+    """Warehouse-ready: no ="..." wrapper unless EXCEL_ESCAPE is enabled."""
+    agg = agg_at(tmp_path / "job.sqlite", group_by=["api", "BU"], unique_fields=["spid"])
+    agg.feed(LINE)
+    out = tmp_path / "counts.csv"
+    agg.write_value_counts_csv(str(out))
+    with open(out, encoding="utf-8") as fh:
+        rows = list(csv.reader(fh))
+    assert rows[1] == ["2112091", "CGetEntitlementsCommand", "AHA INDIA", "1"]
     agg.store.close()

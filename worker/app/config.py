@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     storage_dir: str = "/data/exports"
     export_retention_days: int = 30
     zip_exports: bool = True
+    # Wrap Excel-coerced values (long ids, timestamps) as ="..." so a
+    # spreadsheet keeps them verbatim. OFF by default: those quotes and the
+    # leading `=` become literal data for a warehouse loading the CSV. Turn on
+    # only for spreadsheet-first workflows.
+    excel_escape: bool = False
     # Exports and pgdata share one host filesystem, so a job that fills the disk
     # does not just fail itself — it stops Postgres writing and takes every other
     # job, every schedule and every login down with it. Refuse to start below this.

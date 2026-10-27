@@ -23,10 +23,9 @@ from sqlalchemy import select, text
 
 from app import db
 from app.config import get_settings
-from app.runner import export_entry_name
 from app.last9 import AggregationSpec, Aggregator, DistinctStore, store_path
 from app.notifications import send_failure_alert
-from app.runner import customer_dir, summary_path, value_counts_path
+from app.runner import customer_dir, export_entry_name, summary_path, value_counts_path
 
 
 def _now() -> datetime:

@@ -71,6 +71,7 @@ def test_export_entry_name_uses_descriptive_filename_inside_zip():
 
 def test_zip_file_uses_arcname(tmp_path):
     import zipfile
+
     from app.runner import _zip_file
 
     p = tmp_path / "job_795.csv"
@@ -118,8 +119,22 @@ def test_run_completes_and_writes_csv(worker_db, monkeypatch):
     rows = list(csv.reader(read_export(job["output_file_path"])))
     assert rows[0] == ["timestamp_utc", "message"]
     assert [r[1] for r in rows[1:]] == ["a", "b", "c"]
-    # Timestamps carry Excel's formula escape so millisecond precision survives
-    # the round-trip through a spreadsheet instead of being reformatted away.
+    # Plain by default: `="..."` is literal data to a warehouse loader.
+    assert not any('="' in r[0] for r in rows[1:])
+    assert all(r[0] and r[0][0] != "=" for r in rows[1:])
+
+
+def test_excel_escape_is_opt_in_for_spreadsheet_workflows(worker_db, monkeypatch):
+    """With EXCEL_ESCAPE on, the timestamp is wrapped so Excel keeps it literal."""
+    _seed(worker_db)
+    monkeypatch.setattr(runner, "iter_extraction", _fake_iter_two_chunks)
+    monkeypatch.setattr(runner.get_settings(), "excel_escape", True)
+
+    runner.run_extraction(1)
+
+    with worker_db.engine().begin() as conn:
+        job = dict(worker_db.load(conn, worker_db.jobs, 1))
+    rows = list(csv.reader(read_export(job["output_file_path"])))
     assert all(r[0].startswith('="') and r[0].endswith('"') for r in rows[1:])
 
 

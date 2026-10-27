@@ -63,8 +63,7 @@ def _seed(wdb, *, aggregation=None, checkpoint=None, start=0, end=7200, chunk_ho
 def _fake_iter_rows(rows, chunk_end=3600):
     def _iter(client, spec, *, checkpoint=None, on_chunk_complete=None, **kw):
         cp: Checkpoint = checkpoint
-        for row in rows:
-            yield row
+        yield from rows
         cp.advance(
             chunk_index=0, chunk_start=spec.start_epoch, chunk_end=chunk_end, rows_delta=len(rows)
         )
@@ -195,7 +194,7 @@ def test_raw_csv_carries_parsed_fields_as_real_columns(worker_db, monkeypatch):
     matched = parsed[1]
     assert matched[1] == "pattern"
     assert matched[3] == "AHA INDIA"
-    assert matched[4] == '="230702032635917346995349"'  # guarded, digits intact
+    assert matched[4] == "230702032635917346995349"  # plain by default; digits intact
     # An unmatched row keeps its place with blank fields rather than vanishing.
     unmatched = parsed[2]
     assert unmatched[1:6] == ["", "", "", "", ""]

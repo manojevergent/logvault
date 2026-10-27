@@ -170,6 +170,22 @@ docker compose exec api python -m app.uniform_columns_migration        # dry run
 docker compose exec api python -m app.uniform_columns_migration --apply
 ```
 
+#### CSV values and `EXCEL_ESCAPE`
+
+By default exports are **plain CSV**, ready to load into a warehouse:
+
+```
+timestamp_utc,spAccountID
+2026-10-27 09:51:38.682,019ac40683bf75c2a3e06ebf4d729770
+```
+
+Set `EXCEL_ESCAPE=true` only when the files are opened in a spreadsheet. Excel
+otherwise turns a long id into `2.30702E+23` and reformats the timestamp, so
+that mode wraps both as `="…"`. Those quotes and the `=` are literal data to a
+warehouse loader — the reason it is off by default.
+
+Existing exports are not rewritten; re-run a job to get the new format.
+
 ## 5. Upgrades
 
 ```bash

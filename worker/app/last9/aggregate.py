@@ -121,6 +121,11 @@ class AggregationSpec:
     # up by the regex's own name (self.parsed_fields); only the header
     # text (self.parsed_field_labels) changes.
     column_labels: dict[str, str] = field(default_factory=dict)
+    # Wrap values Excel would coerce (long ids, timestamps) as `="..."` so a
+    # spreadsheet keeps them verbatim. That literal `=` and the quotes are
+    # DATA, so a warehouse loading the CSV gets `="2112091"` instead of
+    # `2112091` — off by default, on via EXCEL_ESCAPE for spreadsheet users.
+    excel_escape: bool = False
 
 
 # Which pattern parsed a row. Always the first parsed column, so a mixed-format
@@ -165,6 +170,7 @@ class Aggregator:
         self.store = store
         self.include_message = spec.include_message
         self.timestamp_column = spec.timestamp_column
+        self.excel_escape = spec.excel_escape
         self._raw_columns = list(spec.raw_columns)
         if self._raw_columns:
             # Caller wants exact columns in exact order — no forced log_format
@@ -218,7 +224,8 @@ class Aggregator:
             values += [hit.fields.get(f, "") for f in self.parsed_fields[1:]]
         else:
             values = [hit.fields.get(f, "") for f in self.parsed_fields]
-        return [excel_safe(v) for v in values]
+        # Opt-in only: the `="..."` wrapper is what breaks warehouse loads.
+        return [excel_safe(v) for v in values] if self.excel_escape else values
 
     def _accumulate(self, hit) -> None:
         key = tuple(hit.fields.get(f) or "" for f in self.group_by)
@@ -295,7 +302,10 @@ class Aggregator:
                 # whatever else is grouped on) the value belongs to.
                 w.writerow([fld, *self.group_by, "count"])
                 for key, value, n in self.store.iter_value_counts(fld):
-                    w.writerow([excel_safe(value), *(excel_safe(k) for k in key), n])
+                    if self.excel_escape:
+                        w.writerow([excel_safe(value), *(excel_safe(k) for k in key), n])
+                    else:
+                        w.writerow([value, *key, n])
                     written += 1
         return written
 
@@ -307,8 +317,7 @@ class Aggregator:
             w = csv.writer(fh)
             w.writerow([*self.group_by, *(f"unique_{f}" for f in self.unique_fields)])
             for key, counts in self.store.iter_groups():
-                w.writerow(
-                    [*(excel_safe(v) for v in key), *(counts.get(f, 0) for f in self.unique_fields)]
-                )
+                row = [*(excel_safe(v) for v in key)] if self.excel_escape else list(key)
+                w.writerow([*row, *(counts.get(f, 0) for f in self.unique_fields)])
                 written += 1
         return written
