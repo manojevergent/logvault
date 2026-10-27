@@ -37,7 +37,9 @@ Key behaviours:
 * **Re-running is safe** — the same `.env` and database are kept, secrets are
   not rotated, and the frontend is rebuilt.
 * Useful flags: `--admin-email`, `--admin-password`, `--no-build`,
-  `--api-port`, `--web-port`, `--no-tls`, `--skip-nginx`, `--yes`.
+  `--api-port`, `--web-port`, `--no-tls`, `--skip-nginx`, `--yes`,
+  `--excel-escape` (write `="…"` wrappers for spreadsheets; leave it off for
+  warehouse loads — see *CSV values and `EXCEL_ESCAPE`* below).
 
 Operate it with:
 

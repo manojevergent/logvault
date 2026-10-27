@@ -34,6 +34,9 @@
 #   --admin-password PWD  Initial admin password (else generated/prompted)
 #   --yes                 Non-interactive; generated admin password printed once
 #   --no-build            Skip `npm run build` (reuse an existing build)
+#   --excel-escape        Write ids/timestamps as ="..." so Excel keeps them
+#                         literal. Leave off when loading the CSVs into a
+#                         warehouse: the quotes and `=` become data there.
 #
 # Requires: bash, root, apt (Debian/Ubuntu), systemd, internet access.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -55,6 +58,7 @@ NO_TLS=0
 SKIP_NGINX=0
 NO_BUILD=0
 YES=0
+EXCEL_ESCAPE=0          # 1 => wrap ids/timestamps as ="..." for spreadsheets
 ADMIN_EMAIL=""
 ADMIN_PASSWORD=""
 
@@ -76,6 +80,7 @@ while [ $# -gt 0 ]; do
         --no-tls)         NO_TLS=1 ;;
         --skip-nginx)     SKIP_NGINX=1 ;;
         --no-build)       NO_BUILD=1 ;;
+        --excel-escape)   EXCEL_ESCAPE=1 ;;
         --api-port)       API_PORT="${2:?--api-port needs a value}"; shift ;;
         --web-port)       WEB_PORT="${2:?--web-port needs a value}"; shift ;;
         --admin-email)    ADMIN_EMAIL="${2:?--admin-email needs a value}"; shift ;;
@@ -254,6 +259,12 @@ if [ -n "$DOMAIN" ]; then
     set_env CORS_ORIGINS "$PUBLIC_WEB"
 else
     set_env CORS_ORIGINS "http://localhost:3000,http://localhost:3001"
+fi
+# Only written when asked for: leaving the key untouched keeps a hand-edited
+# .env intact on re-runs, and .env.example already ships the warehouse-safe
+# default (false).
+if [ "$EXCEL_ESCAPE" -eq 1 ]; then
+    set_env EXCEL_ESCAPE true
 fi
 chown "$APP_USER:$APP_USER" "$ENV_FILE"; chmod 600 "$ENV_FILE"
 ok "environment written (admin: $ADMIN_EMAIL)"
@@ -499,6 +510,11 @@ echo "  Restart    : systemctl restart logvault-api logvault-worker logvault-web
 echo "  Data       : $STATE_DIR/exports   (zip archives)"
 echo "              $STATE_DIR/backups   (nightly pg_dump if the backup task runs)"
 echo "  Config     : $ENV_FILE   (chmod 600)"
+if [ "$EXCEL_ESCAPE" -eq 1 ]; then
+    echo "  CSV values : Excel-escaped (=\"...\") — for spreadsheets, not warehouses"
+else
+    echo "  CSV values : plain — warehouse-ready (set --excel-escape for Excel)"
+fi
 echo
 echo "  After changing code: re-run this script (or 'npm run build' + systemctl restart logvault-web)."
 printf '%s========================================================================%s\n' "$c_green" "$c_reset"
