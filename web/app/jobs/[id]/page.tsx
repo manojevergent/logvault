@@ -200,7 +200,13 @@ export default function JobDetailPage() {
   const rows = progress?.rows_written ?? job?.rows_written ?? 0;
   const completed = progress?.completed_chunks ?? job?.completed_chunks ?? 0;
   const total = progress?.total_chunks ?? job?.total_chunks ?? 0;
-  const pct = total ? Math.round((completed / total) * 100) : 0;
+  // A completed job is 100% by definition. `total_chunks` is an estimate that
+  // the worker re-fits as it adapts chunk size, and runs finished before that
+  // re-fit still carry the old denominator — that is how a job completed at
+  // "13 / 25" (52%). The status is the authority for finished work; in-flight
+  // jobs keep the live ratio.
+  const pct =
+    status === "completed" ? 100 : total ? Math.min(100, Math.round((completed / total) * 100)) : 0;
   const done = TERMINAL.includes(status);
 
   React.useEffect(() => {
@@ -516,7 +522,12 @@ export default function JobDetailPage() {
         <CardContent className="space-y-2 p-3">
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             <Stat label="Rows written" value={rows.toLocaleString()} />
-            <Stat label="Chunks" value={`${completed} / ${total || "?"}`} />
+            <Stat
+              label="Chunks"
+              value={`${completed} / ${
+                status === "completed" && completed > 0 ? completed : total || "?"
+              }`}
+            />
             <Stat
               label="Throughput"
               value={throughput ? `${throughput.toLocaleString()}/s` : "—"}

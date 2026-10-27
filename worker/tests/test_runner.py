@@ -206,6 +206,52 @@ def test_adaptive_chunk_size_reports_every_change(worker_db, monkeypatch):
     assert returned[1] == 1.0, "shrinking back to the starting size is still a change"
 
 
+def test_total_chunks_tracks_adaptive_growth_so_a_finished_job_reads_100pct(worker_db, monkeypatch):
+    """A 6h window at 1h chunks is queued as 6 chunks, but sparse data doubles
+    the window each boundary, so it really finishes in 3.
+
+    The denominator used to be computed once at job start and never updated, so
+    a job that grew its chunks completed showing "3 / 6" (50%) with a green bar
+    frozen halfway. The total has to be re-estimated at every chunk boundary.
+    """
+    _seed(worker_db, start=0, end=6 * 3600, chunk_hours=1)
+
+    def fake(client, spec, *, checkpoint=None, on_chunk_complete=None, **kw):
+        cp = checkpoint
+        h = spec.chunk_hours
+        cursor = spec.start_epoch
+        idx = 0
+        while cursor < spec.end_epoch:
+            end = min(cursor + int(h * 3600), spec.end_epoch)
+            cp.advance(chunk_index=idx, chunk_start=cursor, chunk_end=end, rows_delta=1)
+            # 1 row per chunk is "sparse" -> the runner doubles the window.
+            new_h = on_chunk_complete(cp, 1)
+            if new_h is not None:
+                h = new_h
+            cursor = end
+            idx += 1
+            yield LogRow(str(idx), "x", "")
+
+    monkeypatch.setattr(runner, "iter_extraction", fake)
+    runner.run_extraction(1)
+
+    with worker_db.engine().begin() as conn:
+        job = dict(worker_db.load(conn, worker_db.jobs, 1))
+        events = [
+            r._mapping["message"]
+            for r in conn.execute(
+                worker_db.job_events.select().order_by(worker_db.job_events.c.id)
+            ).all()
+        ]
+
+    assert job["status"] == "completed"
+    assert job["completed_chunks"] == 3, "1h -> 2h -> 4h covers 6h in three chunks"
+    assert job["total_chunks"] == job["completed_chunks"], "a finished job must read N / N"
+    # The per-chunk feed has to agree with the bar, not report the stale plan.
+    assert "Chunk 3/3 done" in events
+    assert not any(e.startswith("Chunk 3/6") for e in events)
+
+
 def test_total_chunks_on_resume_counts_only_what_is_left(worker_db, monkeypatch):
     """Resuming must not re-measure the whole range at the adapted chunk size.
 

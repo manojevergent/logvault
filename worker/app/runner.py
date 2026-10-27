@@ -445,7 +445,7 @@ def run_extraction(job_id: int) -> None:
     _DENSE = 5000  # rows/chunk above this → halve chunk_hours (down to 0.25 h)
 
     def on_chunk(cp: Checkpoint, rows_in_chunk: int) -> float | None:
-        nonlocal last_rows
+        nonlocal last_rows, total
         if f is not None:
             f.flush()
             os.fsync(f.fileno())
@@ -461,9 +461,21 @@ def run_extraction(job_id: int) -> None:
             h = max(h / 2, 0.25)
         _chunk_hours[0] = h
 
+        # Re-estimate the remaining chunk count at the size actually in use.
+        # `total` was computed once from the starting size; adaptive sizing then
+        # doubles chunks on sparse data, so a 25-hour window queued as 25 chunks
+        # finished in 13 and the bar stopped at 52%. Recomputing each boundary
+        # keeps the denominator in step with the work that remains.
+        nxt = cp.next_chunk_start
+        remaining = (
+            count_chunks(nxt, spec.end_epoch, h) if nxt is not None and nxt < spec.end_epoch else 0
+        )
+        total = cp.completed_chunks + remaining
+
         checkpoint_extra = {"file_offset": f.tell() if f is not None else 0, "chunk_hours": h}
         update_fields: dict = {
             "completed_chunks": cp.completed_chunks,
+            "total_chunks": total,
             "rows_written": cp.rows_written,
             "current_chunk_start": cp.current_chunk_start,
             "preview": preview_sample,
@@ -597,6 +609,13 @@ def run_extraction(job_id: int) -> None:
             final.update(rows_written=written, completed_chunks=1, total_chunks=1)
         else:
             final["output_file_path"] = path
+            # Only when the checkpoint actually reached the end: that is the
+            # "finished" case, where the bar must read N / N. A run that ends
+            # without covering the range keeps its estimate instead of
+            # pretending the little it did was all of the work.
+            covered = cp.next_chunk_start is not None and cp.next_chunk_start >= spec.end_epoch
+            if covered:
+                final["total_chunks"] = cp.completed_chunks
         msg = "Preview ready" if is_preview else "Job completed"
         if cp.skipped_batches:
             # A short output that reports itself as clean is the dangerous case:
