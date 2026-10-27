@@ -5,12 +5,57 @@ requirements, the installers, what gets set up, first login, upgrades, and
 uninstall. Day-to-day operations (deploy, scaling, backups, troubleshooting)
 live in [RUNBOOK.md](RUNBOOK.md).
 
+## 0. Production server (no Docker) — `install-prod.sh`
+
+For a dedicated Linux server this is the one to use: it installs native
+services, registers systemd units, and puts nginx + TLS in front.
+
+```bash
+# on the server, as root, from the repo root
+git clone https://github.com/manojevergent/logvault.git /opt/logvault
+cd /opt/logvault
+
+sudo ./install-prod.sh --domain logvault.example.com --ssl-email ops@example.com --yes
+```
+
+What it does: apt base packages (+ Node 20 from NodeSource if needed), a
+`logvault` system user, PostgreSQL database with a generated password, Redis,
+`.env` with generated secrets, Python venvs, Alembic migrations + seed, a
+Next.js standalone production build, three systemd units
+(`logvault-api`, `logvault-worker`, `logvault-web`) enabled on boot, and an
+nginx site with optional Let's Encrypt TLS.
+
+Key behaviours:
+
+* **API is served under `/api`** (nginx strips the prefix). This is required:
+  API routes (`/jobs`, `/auth`, …) collide with the web pages (`/jobs`,
+  `/jobs/new`, …) otherwise. `NEXT_PUBLIC_API_BASE_URL` is baked into the
+  build as `https://<domain>/api`.
+* **Point DNS at the server before running** if you want TLS; certbot needs to
+  reach `http://<domain>/.well-known/`. Without DNS you can pass `--no-tls`
+  (HTTP only) or `--skip-nginx` (bring your own proxy).
+* **Re-running is safe** — the same `.env` and database are kept, secrets are
+  not rotated, and the frontend is rebuilt.
+* Useful flags: `--admin-email`, `--admin-password`, `--no-build`,
+  `--api-port`, `--web-port`, `--no-tls`, `--skip-nginx`, `--yes`.
+
+Operate it with:
+
+```bash
+systemctl status logvault-api logvault-worker logvault-web
+journalctl -u logvault-api -f
+systemctl restart logvault-api logvault-worker logvault-web
+```
+
+Files: code in the clone dir, state in `/var/lib/logvault/{exports,backups}`,
+config in `<repo>/.env` (0600).
+
 ## 1. Requirements
 
 | Need | Minimum | Notes |
 | --- | --- | --- |
-| OS | Linux (any modern distro) or Windows 10/11 | Use `install.sh` on Linux, `install.ps1` on Windows |
-| Docker | Docker Engine 24+ / Docker Desktop 4.25+ | Must include `docker compose` (v2 plugin) |
+| OS | Linux (any modern distro) or Windows 10/11 | Prod: `install-prod.sh` (Linux, no Docker). Dev: `install.sh` on Linux, `install.ps1` on Windows |
+| Docker | Docker Engine 24+ / Docker Desktop 4.25+ | Only for `install.sh` / `install.ps1`; `install-prod.sh` needs no Docker |
 | RAM / disk | 4 GB RAM, 20 GB free disk | Extractions write CSVs to local disk; jobs refuse to start below `MIN_FREE_DISK_GB` free |
 | Network | Outbound HTTPS to `app.last9.io` and your container registry | No inbound ports need exposing beyond your own access to the UI/API |
 
