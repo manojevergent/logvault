@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import audit, signing
@@ -30,6 +30,7 @@ from app.schemas import (
     JobEventOut,
     JobExport,
     JobOut,
+    JobStats,
     JobStatus,
     RollupCreate,
 )
@@ -580,6 +581,7 @@ def list_jobs(
     limit: int = Query(default=200, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
     include_previews: bool = Query(default=False),
+    previews_only: bool = Query(default=False),
     db: Session = Depends(get_db),
 ) -> list[JobOut]:
     # Bounded by default: a daily schedule left running for a year is ~365 rows
@@ -587,7 +589,9 @@ def list_jobs(
     # Filter-test previews stay out unless asked: they would drown the real
     # extractions otherwise (every "Test filter" click is a job row).
     stmt = select(*_LIST_COLUMNS).order_by(Job.created_at.desc()).limit(limit).offset(offset)
-    if not include_previews:
+    if previews_only:
+        stmt = stmt.where(Job.is_preview.is_(True))
+    elif not include_previews:
         stmt = stmt.where(Job.is_preview.is_(False))
     if status_filter:
         stmt = stmt.where(Job.status == status_filter)
@@ -604,6 +608,28 @@ def list_jobs(
             ).all()
         )
     return [_row_to_out(r, labels.get(r["credential_id"])) for r in rows]
+
+
+@router.get("/stats", response_model=JobStats)
+def job_stats(db: Session = Depends(get_db)) -> JobStats:
+    """Whole-table aggregates for the dashboard and tab counts.
+
+    Must be declared before `/{job_id}` so the literal path wins.
+    """
+    real = Job.is_preview.is_(False)
+    total, rows = db.execute(
+        select(func.count(Job.id), func.coalesce(func.sum(Job.rows_written), 0)).where(real)
+    ).one()
+    by_status = dict(
+        db.execute(select(Job.status, func.count(Job.id)).where(real).group_by(Job.status)).all()
+    )
+    previews = db.scalar(select(func.count(Job.id)).where(Job.is_preview.is_(True))) or 0
+    return JobStats(
+        total=int(total or 0),
+        rows_written=int(rows or 0),
+        by_status={str(k): int(v) for k, v in by_status.items()},
+        previews=int(previews),
+    )
 
 
 @router.get("/{job_id}", response_model=JobOut)

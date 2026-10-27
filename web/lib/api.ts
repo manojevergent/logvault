@@ -324,8 +324,37 @@ export const JOB_TONE: Record<JobStatus, "neutral" | "info" | "warning" | "succe
 // list responses omit `preview`/`aggregation_result`/`rollup_of` and carry
 // only the label+customer keys of `filter_spec` — use getJob() for the rest.
 // Filter-test previews are excluded unless asked (see the Previews tab).
-export const listJobs = (limit = 200, includePreviews = false) =>
-  req<Job[]>(`/jobs?limit=${limit}${includePreviews ? "&include_previews=true" : ""}`);
+export type ListJobsOptions = {
+  includePreviews?: boolean;
+  previewsOnly?: boolean;
+  offset?: number;
+  status?: JobStatus;
+};
+
+export const listJobs = (
+  limit = 200,
+  opts: ListJobsOptions | boolean = {}
+) => {
+  // Boolean form kept for the older `listJobs(limit, true)` call site.
+  const o: ListJobsOptions = typeof opts === "boolean" ? { includePreviews: opts } : opts;
+  const q = new URLSearchParams({ limit: String(limit) });
+  if (o.includePreviews) q.set("include_previews", "true");
+  if (o.previewsOnly) q.set("previews_only", "true");
+  if (o.offset) q.set("offset", String(o.offset));
+  if (o.status) q.set("status", o.status);
+  return req<Job[]>(`/jobs?${q.toString()}`);
+};
+
+export type JobStats = {
+  total: number;
+  rows_written: number;
+  by_status: Record<string, number>;
+  previews: number;
+};
+
+/** True totals across the whole table — the list itself is page-limited. */
+export const getJobStats = () => req<JobStats>("/jobs/stats");
+
 export const getJob = (id: number) => req<Job>(`/jobs/${id}`);
 export const createJob = (body: JobCreateInput) =>
   req<Job>("/jobs", { method: "POST", body: JSON.stringify(body) });

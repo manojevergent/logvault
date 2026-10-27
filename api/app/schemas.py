@@ -344,6 +344,17 @@ class JobEventOut(BaseModel):
     rows_delta: int
 
 
+class JobStats(BaseModel):
+    """Server-side aggregates, so headline numbers are not capped by the list
+    page size. The UI used to sum the first 200 rows and present it as a total."""
+
+    total: int
+    # Real extractions only; previews are counted separately.
+    rows_written: int
+    by_status: dict[str, int]
+    previews: int
+
+
 # ── admin ─────────────────────────────────────────────────────────────────────
 
 

@@ -155,6 +155,39 @@ def test_list_hides_previews_unless_asked(client, monkeypatch):
     assert [j for j in listed if j["id"] == prev][0]["is_preview"] is True
 
 
+def test_list_previews_only_returns_only_previews(client, monkeypatch):
+    _create(client, monkeypatch)
+    prev = _create(client, monkeypatch, is_preview=True).json()["id"]
+
+    listed = client.get("/jobs", params={"previews_only": "true"}).json()
+    assert [j["id"] for j in listed] == [prev]
+
+
+def test_stats_reports_whole_table_totals(client, monkeypatch):
+    """The list is page-limited; headline numbers must not be derived from it."""
+    a = _create(client, monkeypatch).json()["id"]
+    b = _create(client, monkeypatch).json()["id"]
+    _create(client, monkeypatch, is_preview=True)
+
+    with client.session_factory() as db:
+        db.get(Job, a).rows_written = 10
+        row_b = db.get(Job, b)
+        row_b.rows_written = 5
+        row_b.status = "completed"
+        db.commit()
+
+    stats = client.get("/jobs/stats").json()
+    assert stats["total"] == 2
+    assert stats["rows_written"] == 15
+    assert stats["previews"] == 1
+    assert stats["by_status"]["completed"] == 1
+    assert stats["by_status"]["queued"] == 1
+
+    # Status filtering on the list still works alongside the aggregate.
+    completed = client.get("/jobs", params={"status": "completed"}).json()
+    assert [j["id"] for j in completed] == [b]
+
+
 def test_download_rejects_bad_signature(client, monkeypatch):
     jid = _create(client, monkeypatch).json()["id"]
     assert client.get(f"/jobs/{jid}/download?exp=9999999999&sig=bad").status_code == 403

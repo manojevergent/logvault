@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   ArrowRight,
@@ -28,10 +28,11 @@ import {
   deleteJobFiles,
   downloadJson,
   exportJob,
+  getJobStats,
   importJob,
   listJobs,
 } from "@/lib/api";
-import { isActive, useJobs } from "@/lib/use-jobs";
+import { isActive } from "@/lib/use-jobs";
 import { Tz, formatDuration, formatEpoch, formatRange, useTz } from "@/lib/time";
 
 type Tab = "all" | "previews" | JobStatus;
@@ -64,15 +65,47 @@ export default function JobsPage() {
   const searchRef = React.useRef<HTMLInputElement>(null);
   const qc = useQueryClient();
 
-  const { data: jobs, isLoading, error, refetch, isFetching } = useJobs(PAGE_LIMIT);
-  // Filter-test previews live outside the main list (they would drown it —
-  // every Test filter click is a job row), fetched only while this tab is open.
-  const { data: previewJobs } = useQuery({
-    queryKey: ["jobs", "previews", PAGE_LIMIT],
-    queryFn: () => listJobs(PAGE_LIMIT, true).then((js) => js.filter((j) => j.is_preview)),
-    enabled: tab === "previews",
+  // Previews are a separate dataset (every "Test filter" click is a job row),
+  // selected by tab rather than filtered out of a mixed list.
+  const statusForTab = tab === "all" || tab === "previews" ? undefined : tab;
+
+  const listQuery = useInfiniteQuery({
+    queryKey: ["jobs-page", tab],
+    queryFn: ({ pageParam }) =>
+      listJobs(PAGE_LIMIT, {
+        offset: pageParam,
+        status: statusForTab,
+        previewsOnly: tab === "previews",
+      }),
+    initialPageParam: 0,
+    // A full page means there may be more; a short page is the end.
+    getNextPageParam: (lastPage, allPages) =>
+      lastPage.length === PAGE_LIMIT ? allPages.length * PAGE_LIMIT : undefined,
+    staleTime: 5_000,
+    refetchInterval: (query) => {
+      const pages = query.state.data?.pages.flat();
+      if (!pages) return 5_000;
+      return pages.some(isActive) ? 5_000 : 60_000;
+    },
+    refetchIntervalInBackground: false,
+  });
+
+  // True totals for the whole table — the list is page-limited, so counts
+  // derived from it under-report once there are more than 200 jobs.
+  const { data: stats } = useQuery({
+    queryKey: ["jobs", "stats"],
+    queryFn: getJobStats,
     staleTime: 5_000,
   });
+
+  const jobs = React.useMemo(() => listQuery.data?.pages.flat(), [listQuery.data]);
+  const isLoading = listQuery.isLoading;
+  const error = listQuery.error as Error | null;
+  const isFetching = listQuery.isFetching;
+  const refetch = () => {
+    qc.invalidateQueries({ queryKey: ["jobs-page"] });
+    qc.invalidateQueries({ queryKey: ["jobs", "stats"] });
+  };
 
   // Only active jobs are cancelable, so selection is scoped to them.
   const [selected, setSelected] = React.useState<Set<number>>(new Set());
@@ -145,9 +178,8 @@ export default function JobsPage() {
   }, []);
 
   const filtered = React.useMemo(() => {
-    const base = tab === "previews" ? previewJobs : jobs;
-    if (!base) return base;
-    let list = tab === "all" || tab === "previews" ? base : base.filter((j) => j.status === tab);
+    if (!jobs) return jobs;
+    let list = jobs;
     if (search.trim()) {
       const q = search.toLowerCase();
       list = list.filter(
@@ -159,15 +191,19 @@ export default function JobsPage() {
       );
     }
     return list;
-  }, [jobs, previewJobs, search, tab]);
+  }, [jobs, search]);
 
-  const counts = React.useMemo(() => {
-    if (!jobs) return {} as Record<string, number>;
-    return jobs.reduce<Record<string, number>>((acc, j) => {
-      acc[j.status] = (acc[j.status] ?? 0) + 1;
-      return acc;
-    }, {});
-  }, [jobs]);
+  // Tab counts come from the server aggregate, not from the loaded page.
+  const counts = React.useMemo(
+    () => stats?.by_status ?? {},
+    [stats]
+  );
+  const tabTotal =
+    tab === "all"
+      ? (stats?.total ?? 0)
+      : tab === "previews"
+        ? (stats?.previews ?? 0)
+        : (stats?.by_status?.[tab] ?? 0);
 
   // "Select all" only ever touches the cancelable rows in the current
   // filtered view — a completed job never gets swept in by it.
@@ -257,9 +293,9 @@ export default function JobsPage() {
         {STATUS_TABS.map((s) => {
           const count =
             s === "all"
-              ? (jobs?.length ?? 0)
+              ? (stats?.total ?? 0)
               : s === "previews"
-                ? (previewJobs?.length ?? 0)
+                ? (stats?.previews ?? 0)
                 : (counts[s] ?? 0);
           const active = tab === s;
           return (
@@ -384,7 +420,8 @@ export default function JobsPage() {
 
       {isLoading && <JobsSkeleton />}
 
-      {!error && jobs && jobs.length === 0 && (
+      {/* Genuinely nothing in the system (as opposed to an empty tab). */}
+      {!error && !isLoading && (stats?.total ?? 0) === 0 && tab === "all" && (
         <div className="flex flex-col items-center gap-2 border border-dashed border-border py-8 text-center">
           <div className="flex h-8 w-8 items-center justify-center bg-muted">
             <ListChecks className="h-5 w-5 text-muted-foreground" />
@@ -395,6 +432,29 @@ export default function JobsPage() {
               Start one
             </Button>
           </Link>
+        </div>
+      )}
+
+      {/* Empty tab or empty search — keep the tab, offer the way back. */}
+      {!error && !isLoading && jobs && jobs.length === 0 && !((stats?.total ?? 0) === 0 && tab === "all") && (
+        <div className="flex flex-col items-center gap-2 py-8 text-center">
+          <p className="text-sm text-muted-foreground">
+            {search.trim()
+              ? "No loaded jobs match this search."
+              : tab === "previews"
+                ? "No previews yet — “Test filter” runs appear here."
+                : `No ${tab} jobs.`}
+          </p>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              setSearch("");
+              setTab("all");
+            }}
+          >
+            Clear filters
+          </Button>
         </div>
       )}
 
@@ -467,11 +527,30 @@ export default function JobsPage() {
               </tbody>
             </table>
           </div>
-          {jobs && jobs.length >= PAGE_LIMIT && (
-            <p className="pt-2 text-center text-xs text-muted-foreground">
-              Showing the {PAGE_LIMIT} most recent extractions.
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
+            <p className="text-xs text-muted-foreground">
+              Showing {(filtered?.length ?? 0).toLocaleString()} of{" "}
+              {stats ? tabTotal.toLocaleString() : "…"}
+              {search.trim() ? " matching" : ""}
+              {tab === "all" ? " extractions" : tab === "previews" ? " previews" : ` ${tab}`}
             </p>
-          )}
+            {listQuery.hasNextPage && !search.trim() && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => listQuery.fetchNextPage()}
+                disabled={listQuery.isFetchingNextPage}
+              >
+                {listQuery.isFetchingNextPage && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                Load {PAGE_LIMIT} more
+              </Button>
+            )}
+            {listQuery.hasNextPage && search.trim() && (
+              <p className="text-xs text-muted-foreground">
+                Search covers loaded rows — clear it to load more.
+              </p>
+            )}
+          </div>
         </>
       )}
     </div>

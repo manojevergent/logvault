@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { IconBadge } from "@/components/ui/icon-badge";
-import { Job, JOB_TONE, JobStatus, listCredentials, listIndexes } from "@/lib/api";
+import { Job, JOB_TONE, JobStatus, getJobStats, listCredentials, listIndexes } from "@/lib/api";
 import { isActive, useJobs } from "@/lib/use-jobs";
 import { formatRange } from "@/lib/time";
 
@@ -28,14 +28,21 @@ export default function DashboardPage() {
     queryKey: ["indexes", ""],
     queryFn: () => listIndexes(),
   });
+  // Whole-table aggregates. The list above is capped at 200 rows, so summing it
+  // under-reported both the row count and the number of active jobs.
+  const { data: stats } = useQuery({
+    queryKey: ["jobs", "stats"],
+    queryFn: getJobStats,
+    staleTime: 5_000,
+  });
 
   const active = jobs.filter(isActive);
-  const totalRows = jobs.reduce((s, j) => s + j.rows_written, 0);
+  const activeCount = stats
+    ? (stats.by_status.queued ?? 0) + (stats.by_status.running ?? 0) + (stats.by_status.paused ?? 0)
+    : undefined;
+  const totalRows = stats?.rows_written;
 
-  const statusCounts = jobs.reduce<Record<string, number>>((acc, j) => {
-    acc[j.status] = (acc[j.status] ?? 0) + 1;
-    return acc;
-  }, {});
+  const statusCounts: Record<string, number> = stats?.by_status ?? {};
   const segments = (Object.keys(statusCounts) as JobStatus[]).map((s) => ({
     label: s,
     value: statusCounts[s],
@@ -61,12 +68,17 @@ export default function DashboardPage() {
 
       {/* Stat cards with 3D colored icon badges */}
       <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-4">
-        <StatCard icon={ListChecks} color="blue" label="Active jobs" value={active.length} />
+        <StatCard
+          icon={ListChecks}
+          color="blue"
+          label="Active jobs"
+          value={activeCount ?? "—"}
+        />
         <StatCard
           icon={Rows3}
           color="green"
           label="Rows extracted"
-          value={totalRows.toLocaleString()}
+          value={totalRows == null ? "—" : totalRows.toLocaleString()}
         />
         <StatCard icon={Database} color="yellow" label="Saved indexes" value={indexes.length} />
         <StatCard icon={KeyRound} color="red" label="Credentials" value={creds.length} />

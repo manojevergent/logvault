@@ -101,6 +101,7 @@ function IndexRow({
   onChange: () => void;
 }) {
   const [editing, setEditing] = React.useState(false);
+  const [confirmDel, setConfirmDel] = React.useState(false);
   const [name, setName] = React.useState(idx.name);
   const [physical, setPhysical] = React.useState(idx.physical_index ?? idx.name);
   const [useDefault, setUseDefault] = React.useState(!idx.full_index_string);
@@ -208,15 +209,38 @@ function IndexRow({
           >
             <Pencil className="h-4 w-4" />
           </Button>
-          <Button
-            size="icon"
-            variant="ghost"
-            aria-label="Delete index"
-            onClick={() => del.mutate()}
-            disabled={del.isPending}
-          >
-            <Trash2 className="h-4 w-4 text-danger" />
-          </Button>
+          {confirmDel ? (
+            <span className="flex items-center gap-1 border border-danger/60 bg-muted px-1.5 py-0.5">
+              <span className="text-[11px] font-medium text-danger">Delete?</span>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-5 px-1.5 text-xs text-danger hover:bg-danger/20"
+                onClick={() => del.mutate()}
+                disabled={del.isPending}
+              >
+                {del.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Yes"}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-5 px-1.5 text-xs text-muted-foreground"
+                onClick={() => setConfirmDel(false)}
+              >
+                No
+              </Button>
+            </span>
+          ) : (
+            <Button
+              size="icon"
+              variant="ghost"
+              aria-label="Delete index"
+              title="Delete this index target"
+              onClick={() => setConfirmDel(true)}
+            >
+              <Trash2 className="h-4 w-4 text-danger" />
+            </Button>
+          )}
         </div>
       </CardContent>
     </Card>
