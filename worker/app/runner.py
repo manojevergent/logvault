@@ -86,6 +86,42 @@ def _send_alert_if_scheduled(conn, job: dict, error_message: str) -> None:
 _UNSAFE_PATH_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 
 
+def _timeframe(start_epoch: int, end_epoch: int) -> str:
+    start = datetime.fromtimestamp(start_epoch, UTC)
+    last = datetime.fromtimestamp(max(start_epoch, end_epoch - 1), UTC)
+    whole_day = end_epoch - start_epoch == 86400 and (start.hour, start.minute, start.second) == (
+        0,
+        0,
+        0,
+    )
+    if whole_day:
+        return start.strftime("%Y-%m-%d")
+    if start.date() == last.date():
+        return f"{start:%Y-%m-%d_%H%M}-{last:%H%M}"
+    return f"{start:%Y-%m-%d_%H%M}-{last:%Y-%m-%d_%H%M}"
+
+
+def export_entry_name(
+    job_id: int,
+    label: str | None,
+    start_epoch: int,
+    end_epoch: int,
+    kind: str = "raw",
+    fmt: str = "csv",
+) -> str:
+    """Format the file name inside the .zip archive to match the descriptive download name."""
+    if label:
+        stem = _UNSAFE_PATH_CHARS.sub("_", label).strip("_") or f"job_{job_id}"
+        stem = f"{stem}_{job_id}"
+    else:
+        stem = f"logvault_job_{job_id}"
+    name = f"{stem}_{_timeframe(start_epoch, end_epoch)}"
+    if kind in ("summary", "counts"):
+        return f"{name}_{kind}.csv"
+    ext = "jsonl" if fmt == "jsonl" else "csv"
+    return f"{name}.{ext}"
+
+
 def customer_dir(customer: str | None) -> str:
     """The export directory for a customer, created on demand.
 
@@ -125,7 +161,7 @@ def value_counts_path(job_id: int, customer: str | None = None) -> str:
     return os.path.join(customer_dir(customer), f"job_{job_id}.counts.csv")
 
 
-def _zip_file(file_path: str) -> str:
+def _zip_file(file_path: str, arcname: str | None = None) -> str:
     """Compress a file in-place; return zipped path. ponytail: delete raw after zipping."""
     if not file_path or not os.path.exists(file_path):
         return file_path
@@ -135,9 +171,10 @@ def _zip_file(file_path: str) -> str:
         return file_path
 
     zip_path = f"{file_path}.zip"
+    entry_name = arcname or os.path.basename(file_path)
     # compresslevel=3 cuts zipping CPU time by ~70% while keeping ~92% compression ratio
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=3) as zf:
-        zf.write(file_path, arcname=os.path.basename(file_path))
+        zf.write(file_path, arcname=entry_name)
     os.remove(file_path)
     return zip_path
 
@@ -536,12 +573,23 @@ def run_extraction(job_id: int) -> None:
                 db.add_event(conn, job_id, f"BigQuery load failed: {exc}", level="warn")
 
     # Compress raw output and summaries to save space (full extractions only)
+    search_label = (job["filter_spec"] or {}).get("label")
+    raw_arcname = export_entry_name(
+        job_id, search_label, spec.start_epoch, spec.end_epoch, "raw", fmt
+    )
+    summary_arcname = export_entry_name(
+        job_id, search_label, spec.start_epoch, spec.end_epoch, "summary", "csv"
+    )
+    counts_arcname = export_entry_name(
+        job_id, search_label, spec.start_epoch, spec.end_epoch, "counts", "csv"
+    )
+
     if f is not None and not is_preview:
-        path = _zip_file(path)
+        path = _zip_file(path, arcname=raw_arcname)
     if summary is not None and not is_preview:
-        summary = _zip_file(summary)
+        summary = _zip_file(summary, arcname=summary_arcname)
     if counts is not None and not is_preview:
-        counts = _zip_file(counts)
+        counts = _zip_file(counts, arcname=counts_arcname)
 
     with eng.begin() as conn:
         final: dict = {"status": "completed", "finished_at": _now(), "preview": preview_sample}

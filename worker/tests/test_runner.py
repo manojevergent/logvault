@@ -47,6 +47,40 @@ def _seed(wdb, *, start=0, end=7200, chunk_hours=1):
         )
 
 
+def test_export_entry_name_uses_descriptive_filename_inside_zip():
+    from app.runner import export_entry_name
+
+    # Full day window
+    name = export_entry_name(
+        795, "GetEntitlementsRequestMessage_20th_oct", 1788000000, 1788086400, "raw", "csv"
+    )
+    assert name.startswith("GetEntitlementsRequestMessage_20th_oct_795_")
+    assert name.endswith(".csv")
+
+    # Summary and counts
+    summary = export_entry_name(
+        795, "GetEntitlementsRequestMessage_20th_oct", 1788000000, 1788086400, "summary", "csv"
+    )
+    assert summary.endswith("_summary.csv")
+
+    counts = export_entry_name(
+        795, "GetEntitlementsRequestMessage_20th_oct", 1788000000, 1788086400, "counts", "csv"
+    )
+    assert counts.endswith("_counts.csv")
+
+
+def test_zip_file_uses_arcname(tmp_path):
+    import zipfile
+    from app.runner import _zip_file
+
+    p = tmp_path / "job_795.csv"
+    p.write_text("a,b\n1,2\n", encoding="utf-8")
+    zipped = _zip_file(str(p), arcname="GetEntitlements_795_2026-10-27.csv")
+    assert zipped.endswith(".zip")
+    with zipfile.ZipFile(zipped) as zf:
+        assert zf.namelist() == ["GetEntitlements_795_2026-10-27.csv"]
+
+
 def _fake_iter_two_chunks(client, spec, *, checkpoint=None, on_chunk_complete=None, **kw):
     cp: Checkpoint = checkpoint
     yield LogRow("1", "a", "")

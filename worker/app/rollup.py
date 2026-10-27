@@ -23,6 +23,7 @@ from sqlalchemy import select, text
 
 from app import db
 from app.config import get_settings
+from app.runner import export_entry_name
 from app.last9 import AggregationSpec, Aggregator, DistinctStore, store_path
 from app.notifications import send_failure_alert
 from app.runner import customer_dir, summary_path, value_counts_path
@@ -32,7 +33,7 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-def _zip_file(file_path: str | None) -> str | None:
+def _zip_file(file_path: str | None, arcname: str | None = None) -> str | None:
     """Compress a file in-place; return zipped path or None. ponytail: delete raw after zipping."""
     if not file_path or not os.path.exists(file_path):
         return file_path
@@ -42,9 +43,10 @@ def _zip_file(file_path: str | None) -> str | None:
         return file_path
 
     zip_path = f"{file_path}.zip"
+    entry_name = arcname or os.path.basename(file_path)
     # compresslevel=3 cuts zipping CPU time by ~70% while keeping ~92% compression ratio
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=3) as zf:
-        zf.write(file_path, arcname=os.path.basename(file_path))
+        zf.write(file_path, arcname=entry_name)
     os.remove(file_path)
     return zip_path
 
@@ -166,9 +168,17 @@ def run_rollup(job_id: int) -> None:
         snap = aggregator.snapshot()
 
         # Compress outputs to save space
-        summary = _zip_file(summary)
-        counts = _zip_file(counts)
-        combined = _zip_file(combined)
+        label = (job["rollup_of"] or {}).get("label") or (job["filter_spec"] or {}).get("label")
+        start_epoch = job["start_epoch"]
+        end_epoch = job["end_epoch"]
+        fmt = job["output_format"]
+        raw_arcname = export_entry_name(job_id, label, start_epoch, end_epoch, "raw", fmt)
+        summary_arcname = export_entry_name(job_id, label, start_epoch, end_epoch, "summary", "csv")
+        counts_arcname = export_entry_name(job_id, label, start_epoch, end_epoch, "counts", "csv")
+
+        summary = _zip_file(summary, arcname=summary_arcname)
+        counts = _zip_file(counts, arcname=counts_arcname)
+        combined = _zip_file(combined, arcname=raw_arcname)
     except Exception as exc:  # noqa: BLE001 - record any failure on the job
         dest.close()
         error_msg = str(exc)
