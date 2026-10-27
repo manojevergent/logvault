@@ -1,7 +1,8 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bookmark, Check, Loader2, Pencil, Trash2, X } from "lucide-react";
+import { Bookmark, Calendar, Check, Loader2, Pencil, Play, PlayCircle, Trash2, X } from "lucide-react";
+import { useRouter } from "next/navigation";
 import * as React from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -134,6 +135,21 @@ export default function TemplatesPage() {
   );
 }
 
+function getYesterdayUtcWindow(): { start: number; end: number } {
+  const now = new Date();
+  const yStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1, 0, 0, 0));
+  const yEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0));
+  return {
+    start: Math.floor(yStart.getTime() / 1000),
+    end: Math.floor(yEnd.getTime() / 1000),
+  };
+}
+
+function getLast24hWindow(): { start: number; end: number } {
+  const now = Math.floor(Date.now() / 1000);
+  return { start: now - 86400, end: now };
+}
+
 function TemplateCard({
   tpl,
   onChange,
@@ -146,7 +162,28 @@ function TemplateCard({
   onToggle: () => void;
 }) {
   const [editing, setEditing] = React.useState(false);
+  const [quickMsg, setQuickMsg] = React.useState("");
+  const router = useRouter();
   const del = useMutation({ mutationFn: () => deleteTemplate(tpl.id), onSuccess: onChange });
+
+  const quickRun = useMutation({
+    mutationFn: (win: { start: number; end: number }) =>
+      createBatchJobs({
+        items: [{ template_id: tpl.id }],
+        start_epoch: win.start,
+        end_epoch: win.end,
+      }),
+    onSuccess: (jobs) => {
+      if (jobs[0]) {
+        setQuickMsg(`Job #${jobs[0].id} queued!`);
+        setTimeout(() => setQuickMsg(""), 4000);
+      }
+    },
+    onError: (err) => {
+      setQuickMsg((err as Error).message);
+      setTimeout(() => setQuickMsg(""), 5000);
+    },
+  });
 
   if (editing) {
     return (
@@ -193,7 +230,37 @@ function TemplateCard({
           </div>
           </div>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {quickMsg ? (
+            <span className="text-xs font-medium text-success">{quickMsg}</span>
+          ) : (
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => quickRun.mutate(getLast24hWindow())}
+                disabled={quickRun.isPending}
+                title="Run extraction for this search over the last 24 hours"
+              >
+                {quickRun.isPending ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Play className="h-3.5 w-3.5 text-primary" />
+                )}
+                Last 24h
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => quickRun.mutate(getYesterdayUtcWindow())}
+                disabled={quickRun.isPending}
+                title="Run extraction for this search over yesterday (00:00 - 23:59 UTC)"
+              >
+                <Calendar className="h-3.5 w-3.5 text-primary" />
+                Yesterday
+              </Button>
+            </>
+          )}
           <Button
             size="icon"
             variant="ghost"

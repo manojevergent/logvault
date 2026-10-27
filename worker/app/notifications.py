@@ -83,12 +83,9 @@ def send_failure_alert(
 
     ponytail: if one fails, other still tries. Retries configured in settings.
     """
-    if not recipients:
-        return
-
     cfg = load_config()
 
-    if cfg["smtp_host"] and cfg["smtp_user"]:
+    if recipients and cfg["smtp_host"] and cfg["smtp_user"]:
         try:
             _retry(lambda: _send_email(cfg, recipients, schedule_name, job_id, error_message))
         except Exception as exc:

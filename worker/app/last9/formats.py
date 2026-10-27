@@ -63,6 +63,8 @@ class FormatMatcher:
         self._last = 0
         self.match_counts: dict[str, int] = {f.name: 0 for f in self._formats}
         self.rows_unmatched = 0
+        # Fast LRU match cache: avoids re-executing regex on repeated log messages
+        self._cache: dict[str, FormatMatch | None] = {}
 
     @property
     def formats(self) -> list[LogFormat]:
@@ -76,9 +78,18 @@ class FormatMatcher:
         return names
 
     def match(self, message: str) -> FormatMatch | None:
+        if message in self._cache:
+            hit = self._cache[message]
+            if hit is not None:
+                self.match_counts[hit.format_name] += 1
+            else:
+                self.rows_unmatched += 1
+            return hit
+
         n = len(self._formats)
         # Start at the previous winner and wrap, so a run of same-format rows
         # costs one attempt each.
+        hit: FormatMatch | None = None
         for offset in range(n):
             i = (self._last + offset) % n
             fmt = self._formats[i]
@@ -88,10 +99,18 @@ class FormatMatcher:
             if m is None:
                 continue
             self._last = i
-            self.match_counts[fmt.name] += 1
-            return FormatMatch(fmt.name, {k: v or "" for k, v in m.groupdict().items()})
-        self.rows_unmatched += 1
-        return None
+            hit = FormatMatch(fmt.name, {k: v or "" for k, v in m.groupdict().items()})
+            break
+
+        if hit is not None:
+            self.match_counts[hit.format_name] += 1
+        else:
+            self.rows_unmatched += 1
+
+        if len(self._cache) >= 2000:
+            self._cache.clear()
+        self._cache[message] = hit
+        return hit
 
     def coverage(self) -> list[dict[str, object]]:
         """Rows parsed per format, most-used first.

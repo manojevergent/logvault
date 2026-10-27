@@ -260,6 +260,8 @@ def cleanup_exports() -> int:
                 select(
                     db.jobs.c.id,
                     db.jobs.c.output_file_path,
+                    db.jobs.c.summary_file_path,
+                    db.jobs.c.counts_file_path,
                     db.jobs.c.finished_at,
                 ).where(
                     db.jobs.c.finished_at.is_not(None),
@@ -273,17 +275,73 @@ def cleanup_exports() -> int:
             fin = _aware(j["finished_at"])
             if not fin:
                 continue
-            path = j["output_file_path"]
-            if path and fin < cutoff and os.path.exists(path):
-                os.remove(path)
-                conn.execute(
-                    db.jobs.update().where(db.jobs.c.id == j["id"]).values(output_file_path=None)
-                )
-                db.add_event(conn, j["id"], "Output expired and deleted", level="warn")
-                removed += 1
+            if fin < cutoff:
+                for path_key in ("output_file_path", "summary_file_path", "counts_file_path"):
+                    p = j[path_key]
+                    if p and os.path.exists(p):
+                        with contextlib.suppress(OSError):
+                            os.remove(p)
+                        removed += 1
+                if j["output_file_path"] or j["summary_file_path"] or j["counts_file_path"]:
+                    conn.execute(
+                        db.jobs.update()
+                        .where(db.jobs.c.id == j["id"])
+                        .values(
+                            output_file_path=None,
+                            summary_file_path=None,
+                            counts_file_path=None,
+                        )
+                    )
+                    db.add_event(conn, j["id"], "Output files expired and deleted", level="warn")
+
             store = store_path(settings.storage_dir, j["id"])
             if fin < store_cutoff and os.path.exists(store):
-                os.remove(store)
+                with contextlib.suppress(OSError):
+                    os.remove(store)
                 db.add_event(conn, j["id"], "Distinct-value store expired", level="warn")
                 removed += 1
+
+        # Low-disk-space emergency purge: if free disk drops below threshold, purge oldest exports
+        try:
+            stat = os.statvfs(settings.storage_dir)
+            free_gb = (stat.f_bavail * stat.f_frsize) / (1024**3)
+            if free_gb < settings.min_free_disk_gb:
+                oldest_jobs = (
+                    conn.execute(
+                        select(
+                            db.jobs.c.id,
+                            db.jobs.c.output_file_path,
+                            db.jobs.c.summary_file_path,
+                            db.jobs.c.counts_file_path,
+                        )
+                        .where(
+                            db.jobs.c.status == "completed",
+                            db.jobs.c.output_file_path.is_not(None),
+                        )
+                        .order_by(db.jobs.c.finished_at.asc())
+                        .limit(20)
+                    )
+                    .mappings()
+                    .all()
+                )
+                for oj in oldest_jobs:
+                    for p in [
+                        oj["output_file_path"],
+                        oj["summary_file_path"],
+                        oj["counts_file_path"],
+                    ]:
+                        if p and os.path.exists(p):
+                            with contextlib.suppress(OSError):
+                                os.remove(p)
+                    conn.execute(
+                        db.jobs.update()
+                        .where(db.jobs.c.id == oj["id"])
+                        .values(
+                            output_file_path=None, summary_file_path=None, counts_file_path=None
+                        )
+                    )
+                    db.add_event(conn, oj["id"], "Purged early due to low disk space", level="warn")
+                    removed += 1
+        except Exception:  # noqa: BLE001
+            pass
     return removed

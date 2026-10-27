@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FileCode2, Loader2, Pencil, Plus, Power, Trash2 } from "lucide-react";
+import { FileCode2, FileDown, Loader2, Pencil, Plus, Power, Trash2, Upload } from "lucide-react";
 import * as React from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,7 @@ import {
   LogFormatInput,
   createLogFormat,
   deleteLogFormat,
+  downloadJson,
   listLogFormats,
   testLogFormat,
   updateLogFormat,
@@ -20,11 +21,46 @@ import {
 export default function LogFormatsPage() {
   const qc = useQueryClient();
   const [adding, setAdding] = React.useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const [importing, setImporting] = React.useState(false);
+  const [importErr, setImportErr] = React.useState("");
+
   const { data: formats, isLoading } = useQuery({
     queryKey: ["log-formats"],
     queryFn: listLogFormats,
   });
   const invalidate = () => qc.invalidateQueries({ queryKey: ["log-formats"] });
+
+  async function handleImport(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImporting(true);
+    setImportErr("");
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      const items: LogFormatInput[] = Array.isArray(parsed) ? parsed : [parsed];
+      for (const item of items) {
+        if (item.name && item.regex) {
+          await createLogFormat({
+            name: item.name,
+            regex: item.regex,
+            hint: item.hint ?? "",
+            sample_line: item.sample_line ?? "",
+            priority: item.priority ?? 100,
+            enabled: item.enabled ?? true,
+            description: item.description ?? "",
+          }).catch(() => {});
+        }
+      }
+      invalidate();
+    } catch (err) {
+      setImportErr((err as Error).message);
+    } finally {
+      setImporting(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
 
   return (
     <div className="mx-auto max-w-5xl animate-fade-in px-6 py-8">
@@ -36,11 +72,56 @@ export default function LogFormatsPage() {
             each row until one matches — so one job can span many log shapes.
           </p>
         </div>
-        <Button onClick={() => setAdding((v) => !v)} variant={adding ? "outline" : "primary"}>
-          <Plus className="h-4 w-4" />
-          {adding ? "Cancel" : "New format"}
-        </Button>
+        <div className="flex items-center gap-2">
+          {formats && formats.length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                downloadJson(
+                  "logvault_log_formats.json",
+                  formats.map((f) => ({
+                    name: f.name,
+                    regex: f.regex,
+                    hint: f.hint,
+                    sample_line: f.sample_line,
+                    priority: f.priority,
+                    enabled: f.enabled,
+                    description: f.description,
+                  }))
+                )
+              }
+              title="Export all log formats as JSON"
+            >
+              <FileDown className="h-4 w-4" /> Export
+            </Button>
+          )}
+          <label className="inline-flex cursor-pointer items-center">
+            <Button variant="outline" size="sm" type="button" disabled={importing} className="pointer-events-none">
+              {importing ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Upload className="h-4 w-4" />
+              )}
+              Import
+            </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".json"
+              className="hidden"
+              onChange={handleImport}
+              disabled={importing}
+            />
+          </label>
+          <Button onClick={() => setAdding((v) => !v)} variant={adding ? "outline" : "primary"}>
+            <Plus className="h-4 w-4" />
+            {adding ? "Cancel" : "New format"}
+          </Button>
+        </div>
       </div>
+
+      {importErr && <p className="mb-4 text-xs text-danger">{importErr}</p>}
 
       {adding && <FormatForm onDone={() => { setAdding(false); invalidate(); }} />}
 

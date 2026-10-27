@@ -102,10 +102,35 @@ def test_the_last_matching_format_is_tried_first_next_time():
     m.match(AHA_LINE)  # walks past "a" to reach "b"
     first_round = attempts["n"]
     attempts["n"] = 0
-    for _ in range(10):
-        m.match(AHA_LINE)
+    for i in range(10):
+        m.match(f"{AHA_LINE} {i}")
     assert first_round == 2  # tried both
     assert attempts["n"] == 10  # then exactly one attempt per row
+
+
+def test_fast_message_cache_bypasses_regex_search():
+    """Identical repeated messages hit the cache, calling search() only once."""
+    attempts = {"n": 0}
+
+    class Counting(LogFormat):
+        def __post_init__(self):
+            super().__post_init__()
+            inner = self.compiled
+
+            class Wrapper:
+                groupindex = inner.groupindex
+
+                def search(self, s):
+                    attempts["n"] += 1
+                    return inner.search(s)
+
+            self.compiled = Wrapper()
+
+    m = FormatMatcher([Counting(name="b", regex=r"SPAccountId\s+(?<cpid>\S+)")])
+    for _ in range(10):
+        m.match(AHA_LINE)
+    assert attempts["n"] == 1  # 1 regex search, 9 cache hits
+    assert m.match_counts["b"] == 10
 
 
 def test_coverage_counts_rows_per_format():

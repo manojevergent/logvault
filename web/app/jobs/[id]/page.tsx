@@ -4,13 +4,16 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   Ban,
+  Check,
   Copy,
   Download,
+  Link2,
   Loader2,
   Pause,
   Play,
   PlayCircle,
   RefreshCw,
+  Search,
   Trash2,
 } from "lucide-react";
 import Link from "next/link";
@@ -244,6 +247,15 @@ export default function JobDetailPage() {
     },
   });
   const [confirmDeleteFiles, setConfirmDeleteFiles] = React.useState(false);
+  const [copiedLink, setCopiedLink] = React.useState(false);
+
+  function copyDownloadLink() {
+    if (!job?.download_url) return;
+    const fullUrl = `${API_BASE}${job.download_url}`;
+    navigator.clipboard.writeText(fullUrl);
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 2500);
+  }
 
   const deleteFiles = useMutation({
     mutationFn: () => deleteJobFiles(id),
@@ -390,15 +402,30 @@ export default function JobDetailPage() {
                 Download expired
               </Button>
             ) : (
-              <a href={`${API_BASE}${job.download_url}`}>
-                <Button size="sm">
-                  <Download className="h-3.5 w-3.5" />
-                  Download {job.output_format.toUpperCase()}
-                  {job.output_size_bytes ? (
-                    <span className="ml-1 opacity-60">· {formatBytes(job.output_size_bytes)}</span>
-                  ) : null}
+              <>
+                <a href={`${API_BASE}${job.download_url}`}>
+                  <Button size="sm">
+                    <Download className="h-3.5 w-3.5" />
+                    Download {job.output_format.toUpperCase()}
+                    {job.output_size_bytes ? (
+                      <span className="ml-1 opacity-60">· {formatBytes(job.output_size_bytes)}</span>
+                    ) : null}
+                  </Button>
+                </a>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={copyDownloadLink}
+                  title="Copy direct signed download URL to clipboard"
+                >
+                  {copiedLink ? (
+                    <Check className="h-3.5 w-3.5 text-success" />
+                  ) : (
+                    <Link2 className="h-3.5 w-3.5" />
+                  )}
+                  {copiedLink ? "Copied link!" : "Copy link"}
                 </Button>
-              </a>
+              </>
             ))}
           {hasAnyFiles && !confirmDeleteFiles && (
             <Button
@@ -542,23 +569,7 @@ export default function JobDetailPage() {
       <AggregationResultCard job={job} />
 
       {job.preview && job.preview.length > 0 && (
-        <Card className="mb-3">
-          <CardHeader className="p-3 pb-1">
-            <CardTitle className="text-foreground">
-              Sample rows {job.is_preview && "(filter test)"}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="p-3 pt-0">
-            <ul className="max-h-44 space-y-0.5 overflow-y-auto scrollbar-thin font-mono text-xs">
-              {job.preview.map((r, i) => (
-                <li key={i} className="flex gap-3">
-                  <span className="shrink-0 text-muted-foreground">{r.timestamp}</span>
-                  <span className="truncate">{r.message}</span>
-                </li>
-              ))}
-            </ul>
-          </CardContent>
-        </Card>
+        <SampleExplorerCard preview={job.preview} isPreview={job.is_preview} />
       )}
 
       <Card>
@@ -747,5 +758,80 @@ function Stat({ label, value }: { label: string; value: string }) {
       <p className="text-[11px] text-muted-foreground">{label}</p>
       <p className="font-mono text-sm font-semibold tracking-tight">{value}</p>
     </div>
+  );
+}
+
+function SampleExplorerCard({
+  preview,
+  isPreview,
+}: {
+  preview: { timestamp: string; message: string }[];
+  isPreview: boolean;
+}) {
+  const [query, setQuery] = React.useState("");
+  const [copiedIdx, setCopiedIdx] = React.useState<number | null>(null);
+
+  const filtered = React.useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return preview;
+    return preview.filter(
+      (r) => r.timestamp.toLowerCase().includes(q) || r.message.toLowerCase().includes(q)
+    );
+  }, [preview, query]);
+
+  function copyRow(msg: string, idx: number) {
+    navigator.clipboard.writeText(msg);
+    setCopiedIdx(idx);
+    setTimeout(() => setCopiedIdx(null), 2000);
+  }
+
+  return (
+    <Card className="mb-3">
+      <CardHeader className="flex flex-row items-center justify-between p-3 pb-1">
+        <CardTitle className="text-foreground">
+          Sample rows {isPreview && "(filter test)"}
+        </CardTitle>
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <Search className="absolute left-2 top-2 h-3.5 w-3.5 text-muted-foreground" />
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search sample rows…"
+              className="h-7 w-48 border border-input bg-background pl-7 pr-2 font-mono text-xs text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            />
+          </div>
+          <span className="font-mono text-xs text-muted-foreground">
+            {filtered.length} of {preview.length}
+          </span>
+        </div>
+      </CardHeader>
+      <CardContent className="p-3 pt-1">
+        <ul className="max-h-52 space-y-1 overflow-y-auto scrollbar-thin font-mono text-xs">
+          {filtered.length === 0 ? (
+            <li className="text-muted-foreground">No sample rows match “{query}”.</li>
+          ) : (
+            filtered.map((r, i) => (
+              <li
+                key={i}
+                className="group flex items-start gap-3 rounded p-1 hover:bg-muted/50"
+              >
+                <span className="shrink-0 select-none text-muted-foreground">{r.timestamp}</span>
+                <span className="flex-1 truncate">{r.message}</span>
+                <button
+                  type="button"
+                  onClick={() => copyRow(r.message, i)}
+                  className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground"
+                  title="Copy log line to clipboard"
+                >
+                  {copiedIdx === i ? "Copied" : "Copy"}
+                </button>
+              </li>
+            ))
+          )}
+        </ul>
+      </CardContent>
+    </Card>
   );
 }
