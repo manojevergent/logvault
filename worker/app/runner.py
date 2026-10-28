@@ -13,6 +13,7 @@ import dataclasses
 import json
 import os
 import re
+import time
 import zipfile
 from datetime import UTC, datetime
 
@@ -396,6 +397,14 @@ def run_extraction(job_id: int) -> None:
     preview_sample: list[dict] = []
     bq_unmatched = 0
 
+    # A chunk can legitimately take hours: India/Frankfurt volumes reach millions
+    # of rows per chunk and Last9's 502s add retry time. Progress used to be
+    # recorded only when a chunk FINISHED, so `reap_stale_jobs` — which judges
+    # liveness by the newest job event — declared a working job dead after 60
+    # quiet minutes. This heartbeat keeps the event fresh (and the Live feed
+    # visibly moving) while rows are still streaming.
+    HEARTBEAT_SECONDS = 300
+
     def write_row(row) -> None:
         nonlocal bq_unmatched
         # Formatted once here rather than at each sink, so the file, the preview
@@ -509,10 +518,23 @@ def run_extraction(job_id: int) -> None:
         return h if h != previous_hours else None
 
     written = 0
+    last_beat = time.monotonic()
     try:
         for row in iter_extraction(client, spec, checkpoint=cp, on_chunk_complete=on_chunk):
             write_row(row)
             written += 1
+            # Keep the job looking alive while one large chunk streams. The
+            # reaper reads job_events, and a chunk that takes longer than
+            # STALE_JOB_MINUTES otherwise looks like a dead worker.
+            if not is_preview and time.monotonic() - last_beat >= HEARTBEAT_SECONDS:
+                last_beat = time.monotonic()
+                with eng.begin() as conn:
+                    db.add_event(
+                        conn,
+                        job_id,
+                        f"Still scanning — {written:,} rows written so far "
+                        f"(chunk {cp.completed_chunks + 1}/{total})",
+                    )
             if is_preview and written >= ROW_CAP:
                 break
     except _Stopped as stop:

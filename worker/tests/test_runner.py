@@ -267,6 +267,50 @@ def test_total_chunks_tracks_adaptive_growth_so_a_finished_job_reads_100pct(work
     assert not any(e.startswith("Chunk 3/6") for e in events)
 
 
+def test_long_chunk_emits_heartbeats_so_the_reaper_does_not_kill_it(worker_db, monkeypatch):
+    """A chunk can take hours (millions of rows, upstream 502 retries).
+
+    Progress used to be recorded only when a chunk finished, so reap_stale_jobs
+    — which reads the newest job event — failed a perfectly healthy job after
+    60 quiet minutes ("worker presumed dead"). The runner now writes a
+    heartbeat while rows stream.
+    """
+    _seed(worker_db, start=0, end=3600)
+
+    def fake(client, spec, *, checkpoint=None, on_chunk_complete=None, **kw):
+        cp = checkpoint
+        for i in range(10):
+            yield LogRow(str(i), f"line {i}", "")
+        cp.advance(chunk_index=0, chunk_start=0, chunk_end=3600, rows_delta=10)
+        on_chunk_complete(cp, 10)
+
+    class Clock:
+        t = 0.0
+
+        def __call__(self):
+            self.t += 60.0  # 5 rows => 5 minutes of wall clock
+            return self.t
+
+    monkeypatch.setattr(runner, "iter_extraction", fake)
+    monkeypatch.setattr(runner.time, "monotonic", Clock())
+
+    runner.run_extraction(1)
+
+    with worker_db.engine().begin() as conn:
+        job = dict(worker_db.load(conn, worker_db.jobs, 1))
+        events = [
+            r._mapping["message"]
+            for r in conn.execute(
+                worker_db.job_events.select().order_by(worker_db.job_events.c.id)
+            ).all()
+        ]
+
+    assert job["status"] == "completed"
+    beats = [e for e in events if e.startswith("Still scanning")]
+    assert beats, "a multi-hour chunk must keep its job event fresh"
+    assert any("rows written so far" in e for e in beats)
+
+
 def test_total_chunks_on_resume_counts_only_what_is_left(worker_db, monkeypatch):
     """Resuming must not re-measure the whole range at the adapted chunk size.
 
