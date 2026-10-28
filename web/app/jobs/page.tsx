@@ -187,7 +187,8 @@ export default function JobsPage() {
           String(j.id).includes(q) ||
           j.region_code.toLowerCase().includes(q) ||
           (j.credential_label ?? "").toLowerCase().includes(q) ||
-          (j.filter_spec?.label ?? "").toLowerCase().includes(q)
+          (j.filter_spec?.label ?? "").toLowerCase().includes(q) ||
+          (j.filter_spec?.customer ?? "").toLowerCase().includes(q)
       );
     }
     return list;
@@ -248,7 +249,7 @@ export default function JobsPage() {
             <input
               ref={searchRef}
               type="search"
-              placeholder="Filter by name, ID, region…"
+              placeholder="Filter by name, ID, customer…"
               aria-label="Filter jobs"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -492,7 +493,7 @@ export default function JobsPage() {
                   </th>
                   <th className="px-3 py-1.5 text-left font-medium">Status</th>
                   <th className="px-3 py-1.5 text-left font-medium">Extraction</th>
-                  <th className="px-3 py-1.5 text-left font-medium">Region</th>
+                  <th className="px-3 py-1.5 text-left font-medium">Customer</th>
                   <th className="px-3 py-1.5 text-left font-medium">
                     <button
                       type="button"
@@ -634,7 +635,16 @@ const JobRow = React.memo(function JobRow({
       <td className="px-3 py-1.5 text-xs" title={job.filter_spec?.label ?? undefined}>
         {extractionName(job) ?? <span className="opacity-40">—</span>}
       </td>
-      <td className="px-3 py-1.5 font-mono text-xs text-muted-foreground">{job.region_code}</td>
+      <td
+        className="px-3 py-1.5 text-xs"
+        title={`Region ${job.region_code}`}
+      >
+        {job.filter_spec?.customer?.trim() ? (
+          job.filter_spec.customer
+        ) : (
+          <span className="opacity-40">—</span>
+        )}
+      </td>
       <td className="px-3 py-1.5 font-mono text-xs text-muted-foreground">
         {formatRange(job.start_epoch, job.end_epoch, tz)}
       </td>

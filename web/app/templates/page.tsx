@@ -215,7 +215,13 @@ function TemplateCard({
           <div className="flex items-center gap-2">
             <span className="font-medium">{tpl.name}</span>
             {tpl.aggregation?.enabled && <Badge tone="info">parse & aggregate</Badge>}
-            {tpl.customer && <Badge tone="neutral">{tpl.customer}</Badge>}
+            {tpl.customer ? (
+              <Badge tone="neutral">{tpl.customer}</Badge>
+            ) : (
+              // Saved before a customer was mandatory — it has to be filled in
+              // (Edit → Customer) before this search can be saved again.
+              <Badge tone="warning">no customer</Badge>
+            )}
           </div>
           <div className="flex flex-wrap gap-1.5">
             {[...tpl.phrases, ...tpl.message_types].map((p, i) => (
@@ -503,6 +509,9 @@ function TemplateEditForm({
 
   const canSave =
     name.trim() !== "" &&
+    // A saved search is filed under a customer; it names the export folder and
+    // is what the jobs list shows, so it is not optional.
+    customer.trim() !== "" &&
     (splitCsv(phrasesText).length > 0 ||
       splitCsv(idsText).length > 0 ||
       splitCsv(messageTypesText).length > 0 ||
@@ -515,8 +524,16 @@ function TemplateEditForm({
           <Field label="Name">
             <Input value={name} onChange={(e) => setName(e.target.value)} />
           </Field>
-          <Field label="Customer folder (optional)">
-            <Input value={customer} onChange={(e) => setCustomer(e.target.value)} />
+          <Field label="Customer (required)">
+            <Input
+              value={customer}
+              onChange={(e) => setCustomer(e.target.value)}
+              placeholder="ABSCBN"
+              required
+            />
+            {!customer.trim() && (
+              <p className="text-xs text-danger">Required to save this search.</p>
+            )}
           </Field>
           <Field label="Default source (optional)">
             <select

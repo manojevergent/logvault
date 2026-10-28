@@ -877,24 +877,37 @@ export default function NewJobPage() {
                 variant="outline"
                 // A parse pattern alone is worth saving — it is the laborious
                 // part, and it stands on its own without any filter.
-                disabled={!hasSomethingToSave}
+                // A customer is mandatory: it files the search's extracts.
+                disabled={!hasSomethingToSave || !customer.trim()}
                 onClick={() => {
                   setTemplateName(searchLabel);
                   setSavingTemplate(true);
                 }}
-                title="Save the current filters and parse pattern as a reusable search"
+                title={
+                  customer.trim()
+                    ? "Save the current filters and parse pattern as a reusable search"
+                    : "Enter a customer name first — saved searches are filed per customer"
+                }
               >
                 <Bookmark className="h-3.5 w-3.5" />
                 Save as search
               </Button>
             )}
             <div className="min-w-[180px] space-y-1.5">
-              <Label>Customer</Label>
+              <Label>
+                Customer <span className="text-danger">*</span>
+              </Label>
               <Input
                 value={customer}
                 onChange={(e) => setCustomer(e.target.value)}
                 placeholder="ABSCBN"
+                required
               />
+              {!customer.trim() && hasSomethingToSave && (
+                <p className="text-xs text-danger">
+                  Required to save this search.
+                </p>
+              )}
             </div>
             {hasSomethingToSave && !savingTemplate && (
               <p className="text-xs text-muted-foreground">
@@ -1253,8 +1266,11 @@ export default function NewJobPage() {
                       <Button
                         type="button"
                         size="sm"
-                        disabled={!aggValid || updateExistingTemplate.isPending}
+                        disabled={!aggValid || !customer.trim() || updateExistingTemplate.isPending}
                         onClick={() => updateExistingTemplate.mutate()}
+                        title={
+                          customer.trim() ? undefined : "Enter a customer name first"
+                        }
                       >
                         {updateExistingTemplate.isPending ? (
                           <Loader2 className="h-3.5 w-3.5 animate-spin" />

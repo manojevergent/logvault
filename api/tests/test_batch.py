@@ -10,7 +10,13 @@ pytestmark = pytest.mark.usefixtures("job_refs")
 
 
 def _template(client, name, **over):
-    body = {"name": name, "phrases": ["ClassName"], "ids": ["Ekkl"], "message_types": []}
+    body = {
+        "name": name,
+        "phrases": ["ClassName"],
+        "ids": ["Ekkl"],
+        "message_types": [],
+        "customer": "TEST_CUSTOMER",
+    }
     body.update(over)
     resp = client.post("/templates", json=body)
     assert resp.status_code == 201

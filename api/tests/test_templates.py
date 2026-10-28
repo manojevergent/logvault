@@ -2,11 +2,51 @@
 
 from __future__ import annotations
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _default_customer(client, monkeypatch):
+    """A customer is mandatory on save.
+
+    These tests were written before that rule, and re-stating it in every body
+    would bury what each test is actually about. Bodies that deliberately send
+    an empty customer (to assert the 422) are left untouched.
+    """
+    orig_post, orig_put = client.post, client.put
+
+    def post(url, *args, **kwargs):
+        if url.rstrip("/") == "/templates" and isinstance(kwargs.get("json"), dict):
+            kwargs["json"].setdefault("customer", "TEST_CUSTOMER")
+        return orig_post(url, *args, **kwargs)
+
+    def put(url, *args, **kwargs):
+        if url.startswith("/templates/") and isinstance(kwargs.get("json"), dict):
+            kwargs["json"].setdefault("customer", "TEST_CUSTOMER")
+        return orig_put(url, *args, **kwargs)
+
+    monkeypatch.setattr(client, "post", post)
+    monkeypatch.setattr(client, "put", put)
+
 
 def _create(client, name="Entitlements SPID", **over):
-    body = {"name": name, "phrases": ["ClassName", "SPAccountId"], "ids": [], "message_types": []}
+    body = {
+        "name": name,
+        "phrases": ["ClassName", "SPAccountId"],
+        "ids": [],
+        "message_types": [],
+        "customer": "TEST_CUSTOMER",
+    }
     body.update(over)
     return client.post("/templates", json=body)
+
+
+def test_a_saved_search_requires_a_customer(client):
+    resp = client.post(
+        "/templates", json={"name": "no customer", "phrases": ["ClassName"], "customer": ""}
+    )
+    assert resp.status_code == 422
+    assert "customer" in resp.json()["detail"]
 
 
 def test_create_and_list(client):

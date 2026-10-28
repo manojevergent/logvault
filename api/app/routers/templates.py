@@ -55,6 +55,14 @@ def _check_source(db: Session, credential_id: int | None, index_target_id: int |
 
 
 def _build_aggregation(body: FilterTemplateCreate, prior: dict | None) -> dict | None:
+    # A saved search is filed under a customer: it names the export folder and
+    # is what the jobs list shows instead of a region. Without it a search's
+    # extractions are unidentifiable, so it is not optional at save time.
+    if not (body.customer or "").strip():
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "a saved search needs a customer name",
+        )
     agg = body.aggregation if body.aggregation and body.aggregation.enabled else None
     if not body.phrases and not body.ids and not body.message_types and not agg:
         raise HTTPException(
