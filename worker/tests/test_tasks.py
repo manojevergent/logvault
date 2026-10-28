@@ -56,7 +56,7 @@ def _events(wdb, job_id: int = 1) -> list[str]:
 def test_a_crash_before_the_runner_starts_marks_the_job_failed(worker_db, monkeypatch):
     _seed(worker_db)
 
-    def boom(_job_id):
+    def boom(_job_id, **_kw):
         raise ImportError("cannot import name 'format_log_timestamp' from 'app.last9'")
 
     monkeypatch.setattr(runner, "run_extraction", boom)
@@ -75,7 +75,7 @@ def test_the_net_does_not_overwrite_a_status_the_runner_already_set(worker_db, m
     'something threw' — the net must not clobber it."""
     _seed(worker_db)
 
-    def pause_then_fail(_job_id):
+    def pause_then_fail(_job_id, **_kw):
         with worker_db.engine().begin() as conn:
             worker_db.update_job(conn, 1, status="paused")
         raise RuntimeError("connection reset while shutting down")
@@ -91,7 +91,7 @@ def test_the_net_does_not_overwrite_a_status_the_runner_already_set(worker_db, m
 def test_a_completed_job_is_left_alone(worker_db, monkeypatch):
     _seed(worker_db)
 
-    def complete_then_fail(_job_id):
+    def complete_then_fail(_job_id, **_kw):
         with worker_db.engine().begin() as conn:
             worker_db.update_job(conn, 1, status="completed")
         raise RuntimeError("error during cleanup, after the work was done")
@@ -110,7 +110,7 @@ def test_rollup_jobs_route_to_the_rollup_runner(worker_db, monkeypatch):
     _seed(worker_db, rollup_of={"schedule_id": 7})
     called = []
     monkeypatch.setattr(rollup, "run_rollup", lambda jid: called.append(jid))
-    monkeypatch.setattr(runner, "run_extraction", lambda jid: pytest.fail("wrong runner"))
+    monkeypatch.setattr(runner, "run_extraction", lambda jid, **_kw: pytest.fail("wrong runner"))
 
     tasks.run_job(1)
     assert called == [1]
@@ -121,11 +121,40 @@ def test_plain_jobs_route_to_the_extraction_runner(worker_db, monkeypatch):
 
     _seed(worker_db)
     called = []
-    monkeypatch.setattr(runner, "run_extraction", lambda jid: called.append(jid))
+    monkeypatch.setattr(runner, "run_extraction", lambda jid, **_kw: called.append(jid))
     monkeypatch.setattr(rollup, "run_rollup", lambda jid: pytest.fail("wrong runner"))
 
     tasks.run_job(1)
     assert called == [1]
+
+
+def test_a_redelivered_message_lets_the_runner_reclaim(worker_db, monkeypatch):
+    """Only a broker redelivery may take over a `running` row — that is the
+    signal the previous worker is gone."""
+    from types import SimpleNamespace
+
+    import celery
+
+    _seed(worker_db)
+    seen = []
+    monkeypatch.setattr(
+        celery,
+        "current_task",
+        SimpleNamespace(request=SimpleNamespace(redelivered=True)),
+    )
+    monkeypatch.setattr(runner, "run_extraction", lambda jid, reclaim=False: seen.append(reclaim))
+
+    tasks.run_job(1)
+    assert seen == [True]
+
+
+def test_a_first_delivery_does_not_ask_to_reclaim(worker_db, monkeypatch):
+    _seed(worker_db)
+    seen = []
+    monkeypatch.setattr(runner, "run_extraction", lambda jid, reclaim=False: seen.append(reclaim))
+
+    tasks.run_job(1)
+    assert seen == [False]
 
 
 def _free_disk(gb: float):
@@ -142,7 +171,9 @@ def test_a_nearly_full_disk_fails_the_job_before_it_starts(worker_db, monkeypatc
     down with it, so one job must fail early rather than every job failing late."""
     _seed(worker_db)
     monkeypatch.setattr(tasks.shutil, "disk_usage", _free_disk(2))
-    monkeypatch.setattr(runner, "run_extraction", lambda _jid: pytest.fail("should not start"))
+    monkeypatch.setattr(
+        runner, "run_extraction", lambda _jid, **_kw: pytest.fail("should not start")
+    )
 
     with pytest.raises(RuntimeError, match="refusing to start"):
         tasks.run_job(1)
@@ -156,7 +187,7 @@ def test_a_healthy_disk_lets_the_job_run(worker_db, monkeypatch):
     _seed(worker_db)
     monkeypatch.setattr(tasks.shutil, "disk_usage", _free_disk(500))
     ran = []
-    monkeypatch.setattr(runner, "run_extraction", lambda jid: ran.append(jid))
+    monkeypatch.setattr(runner, "run_extraction", lambda jid, **_kw: ran.append(jid))
 
     tasks.run_job(1)
     assert ran == [1]

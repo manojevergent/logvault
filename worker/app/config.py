@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     # a single request can legitimately retry for ~14 minutes (10 attempts,
     # backoff capped at 300s) without emitting an event.
     stale_job_minutes: int = 60
+    # A re-delivered task (the previous worker died) may take over a `running`
+    # job once it has been this quiet. Must stay well above the runner's 5-minute
+    # heartbeat, or a live job could be stolen from itself.
+    stale_reclaim_minutes: int = 10
 
     # Notifications
     slack_webhook_url: str = ""

@@ -117,7 +117,18 @@ def run_job(job_id: int) -> None:
     """
     # Imported before the try so the failure handler is usable even when the
     # imports below are what break.
+    from celery import current_task
+
     from app import db
+
+    # True when the broker handed this message to us again because the previous
+    # worker died holding it. Only then may the runner take over a job row that
+    # still says `running`; anything else would risk two workers on one file.
+    # Guarded: outside a worker (direct calls, tests) there is no current task.
+    try:
+        redelivered = bool(current_task.request.redelivered)
+    except Exception:  # noqa: BLE001 - no task context means "first delivery"
+        redelivered = False
 
     try:
         from app.rollup import run_rollup
@@ -132,7 +143,7 @@ def run_job(job_id: int) -> None:
         if is_rollup:
             run_rollup(job_id)
         else:
-            run_extraction(job_id)
+            run_extraction(job_id, reclaim=redelivered)
     except Exception as exc:
         _mark_failed(db, job_id, exc)
         raise  # let Celery record the task failure too

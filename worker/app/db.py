@@ -22,8 +22,10 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    and_,
     create_engine,
     func,
+    or_,
     select,
 )
 
@@ -153,19 +155,40 @@ def current_status(conn, job_id: int) -> str | None:
     return conn.execute(select(jobs.c.status).where(jobs.c.id == job_id)).scalar_one_or_none()
 
 
-def claim_job(conn, job_id: int, **values) -> bool:
+def claim_job(conn, job_id: int, *, reclaim_before=None, **values) -> bool:
     """Move a job from ``queued`` to ``running``, and say whether we got it.
 
     The transition is the claim: conditioning the UPDATE on the current status
     means exactly one worker can win it. Without this, a resume dispatched while
     the first worker was still mid-chunk put two workers on the same CSV and the
-    same value store — duplicated rows and wrong counts, reported as a clean
-    "completed" — and a job cancelled while still queued started anyway, because
+    same value store - duplicated rows and wrong counts, reported as a clean
+    "completed" - and a job cancelled while still queued started anyway, because
     the status was overwritten without ever being read.
+
+    ``reclaim_before`` lets a *running* job be taken over, but only when it has
+    gone quiet since that instant. That is the redelivery case: the broker hands
+    the task to a new worker after the old one died, and the row still says
+    ``running``. Without it the job sat idle until ``reap_stale_jobs`` failed it
+    an hour later, and only a manual retry resumed it. The runner heartbeats
+    every few minutes, so a job that is actually being worked never qualifies.
     """
+    claimable = jobs.c.status == "queued"
+    if reclaim_before is not None:
+        last_event = (
+            select(func.max(job_events.c.ts))
+            .where(job_events.c.job_id == jobs.c.id)
+            .correlate(jobs)
+            .scalar_subquery()
+        )
+        last_seen = func.coalesce(last_event, jobs.c.started_at)
+        claimable = or_(
+            claimable,
+            and_(jobs.c.status == "running", last_seen < reclaim_before),
+        )
+
     result = conn.execute(
         jobs.update()
-        .where(jobs.c.id == job_id, jobs.c.status == "queued")
+        .where(jobs.c.id == job_id, claimable)
         .values(status="running", **values)
         .returning(jobs.c.id)
     )

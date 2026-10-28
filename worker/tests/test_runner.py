@@ -4,6 +4,7 @@ The Last9 client is never hit; iter_extraction is faked."""
 from __future__ import annotations
 
 import csv
+from datetime import UTC, datetime, timedelta
 
 import app.runner as runner
 from app import crypto
@@ -155,6 +156,83 @@ def test_a_second_worker_cannot_claim_a_running_job(worker_db, monkeypatch):
     runner.run_extraction(1)
 
     assert ran == [], "worker B must not start extracting a job already claimed"
+
+
+def test_a_redelivered_task_reclaims_a_quiet_running_job(worker_db, monkeypatch):
+    """The broker re-delivers a task after its worker died; the row still says
+    `running`, so the new task used to bow out and the job idled until the
+    reaper failed it an hour later. With the redelivery flag the new worker
+    takes it over and resumes from the checkpoint."""
+    _seed(worker_db, start=0, end=7200)
+    long_ago = datetime.now(UTC) - timedelta(minutes=30)
+    with worker_db.engine().begin() as conn:
+        worker_db.update_job(conn, 1, status="running", started_at=long_ago)
+        conn.execute(
+            worker_db.job_events.insert().values(
+                job_id=1, ts=long_ago, level="info", message="Chunk 0/2 done", rows_delta=0
+            )
+        )
+
+    monkeypatch.setattr(runner, "iter_extraction", _fake_iter_two_chunks)
+    runner.run_extraction(1, reclaim=True)
+
+    with worker_db.engine().begin() as conn:
+        job = dict(worker_db.load(conn, worker_db.jobs, 1))
+        events = [
+            r._mapping["message"]
+            for r in conn.execute(worker_db.job_events.select().order_by(worker_db.job_events.c.id))
+        ]
+    assert job["status"] == "completed"
+    assert any("Resumed by a new worker" in e for e in events)
+
+
+def test_a_quiet_job_is_not_reclaimed_without_redelivery(worker_db, monkeypatch):
+    """The takeover is gated on Celery's redelivered flag: a plain duplicate
+    dispatch must never touch a running job, however quiet it looks."""
+    _seed(worker_db, start=0, end=7200)
+    long_ago = datetime.now(UTC) - timedelta(minutes=30)
+    with worker_db.engine().begin() as conn:
+        worker_db.update_job(conn, 1, status="running", started_at=long_ago)
+        conn.execute(
+            worker_db.job_events.insert().values(
+                job_id=1, ts=long_ago, level="info", message="Chunk 0/2 done", rows_delta=0
+            )
+        )
+
+    ran = []
+    monkeypatch.setattr(runner, "iter_extraction", lambda *a, **kw: ran.append(1) or iter(()))
+    runner.run_extraction(1)  # reclaim defaults to False
+
+    assert ran == []
+    with worker_db.engine().begin() as conn:
+        assert dict(worker_db.load(conn, worker_db.jobs, 1))["status"] == "running"
+
+
+def test_a_live_running_job_is_never_stolen(worker_db, monkeypatch):
+    """Even a redelivery must not take over a job that heartbeated recently —
+    the original worker may still be writing to the same file."""
+    _seed(worker_db, start=0, end=7200)
+    with worker_db.engine().begin() as conn:
+        worker_db.update_job(
+            conn, 1, status="running", started_at=datetime.now(UTC) - timedelta(minutes=30)
+        )
+        conn.execute(
+            worker_db.job_events.insert().values(
+                job_id=1,
+                ts=datetime.now(UTC),
+                level="info",
+                message="Still scanning — 1,000 rows",
+                rows_delta=0,
+            )
+        )
+
+    ran = []
+    monkeypatch.setattr(runner, "iter_extraction", lambda *a, **kw: ran.append(1) or iter(()))
+    runner.run_extraction(1, reclaim=True)
+
+    assert ran == [], "a job that heartbeated seconds ago must not be reclaimed"
+    with worker_db.engine().begin() as conn:
+        assert dict(worker_db.load(conn, worker_db.jobs, 1))["status"] == "running"
 
 
 def test_a_job_canceled_while_queued_never_starts(worker_db, monkeypatch):

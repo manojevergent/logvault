@@ -15,7 +15,7 @@ import os
 import re
 import time
 import zipfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 from sqlalchemy import text
@@ -180,7 +180,7 @@ def _zip_file(file_path: str, arcname: str | None = None) -> str:
     return zip_path
 
 
-def run_extraction(job_id: int) -> None:
+def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
     eng = db.engine()
 
     with eng.begin() as conn:
@@ -197,9 +197,30 @@ def run_extraction(job_id: int) -> None:
         # Claim before doing anything: the conditional UPDATE is what stops a
         # second worker joining a job already in flight, and what makes a cancel
         # or pause issued while the job was still queued actually stick.
-        if not db.claim_job(conn, job_id, started_at=_now(), error_message=None):
+        #
+        # `reclaim` is passed only when Celery reports the message was
+        # REDELIVERED, i.e. the previous worker died holding it. The row still
+        # says `running`, so without this the new delivery bowed out and the job
+        # idled until the reaper failed it an hour later. Requiring the
+        # redelivery flag — rather than just a quiet job — means a live run can
+        # never be taken over, even if it is stuck in a long retry chain.
+        was_running = job["status"] == "running"
+        reclaim_before = (
+            _now() - timedelta(minutes=get_settings().stale_reclaim_minutes) if reclaim else None
+        )
+        if not db.claim_job(
+            conn,
+            job_id,
+            started_at=_now(),
+            error_message=None,
+            reclaim_before=reclaim_before,
+        ):
             return
-        db.add_event(conn, job_id, "Job started")
+        db.add_event(
+            conn,
+            job_id,
+            "Resumed by a new worker after it went quiet" if was_running else "Job started",
+        )
         job = dict(job)
         cred = dict(cred)
         idx = dict(idx)
