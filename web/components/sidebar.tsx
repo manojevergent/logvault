@@ -8,6 +8,8 @@ import {
   ListChecks,
   Database,
   FileCode2,
+  PanelLeftClose,
+  PanelLeftOpen,
   PlusCircle,
   Settings,
   ShieldCheck,
@@ -68,10 +70,12 @@ function NavLink({
   item,
   active,
   onNavigate,
+  collapsed = false,
 }: {
   item: NavItem;
   active: boolean;
   onNavigate?: () => void;
+  collapsed?: boolean;
 }) {
   const Icon = item.icon;
   return (
@@ -79,8 +83,11 @@ function NavLink({
       href={item.href}
       onClick={onNavigate}
       aria-current={active ? "page" : undefined}
+      aria-label={collapsed ? item.label : undefined}
+      title={collapsed ? item.label : undefined}
       className={cn(
-        "group flex items-center gap-3 px-3 py-2 text-sm font-medium transition-colors duration-150",
+        "group flex items-center gap-3 py-2 text-sm font-medium transition-colors duration-150",
+        collapsed ? "justify-center px-0" : "px-3",
         active
           ? "bg-primary/10 font-semibold text-primary"
           : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
@@ -92,7 +99,7 @@ function NavLink({
           active ? "text-primary" : "text-muted-foreground group-hover:text-foreground"
         )}
       />
-      {item.label}
+      {!collapsed && item.label}
     </Link>
   );
 }
@@ -102,23 +109,30 @@ function NavSection({
   items,
   current,
   onNavigate,
+  collapsed = false,
 }: {
   title: string;
   items: NavItem[];
   current: string | null;
   onNavigate?: () => void;
+  collapsed?: boolean;
 }) {
   return (
     <div className="flex flex-col gap-1">
-      <p className="px-3 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-        {title}
-      </p>
+      {collapsed ? (
+        <div className="mx-2 my-1 border-t border-border" aria-hidden />
+      ) : (
+        <p className="px-3 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+          {title}
+        </p>
+      )}
       {items.map((item) => (
         <NavLink
           key={item.href}
           item={item}
           active={current === item.href}
           onNavigate={onNavigate}
+          collapsed={collapsed}
         />
       ))}
     </div>
@@ -129,19 +143,30 @@ function SidebarBody({
   current,
   onNavigate,
   onClose,
+  collapsed = false,
+  onToggle,
 }: {
   current: string | null;
   onNavigate?: () => void;
   onClose?: () => void;
+  collapsed?: boolean;
+  onToggle?: () => void;
 }) {
   return (
     <>
-      <div className="flex h-14 items-center justify-between gap-2.5 border-b border-border px-5">
+      <div
+        className={cn(
+          "flex h-14 items-center gap-2.5 border-b border-border",
+          collapsed ? "justify-center px-2" : "justify-between px-5"
+        )}
+      >
         <div className="flex items-center gap-2.5">
           <div className="icon-3d flex h-8 w-8 items-center justify-center bg-gradient-to-br from-[#4285F4] to-[#1a56db]">
             <Vault className="h-[18px] w-[18px] text-white" strokeWidth={2.4} />
           </div>
-          <span className="text-[15px] font-semibold tracking-tight">LogVault</span>
+          {!collapsed && (
+            <span className="text-[15px] font-semibold tracking-tight">LogVault</span>
+          )}
         </div>
         {onClose && (
           <button
@@ -155,31 +180,91 @@ function SidebarBody({
         )}
       </div>
 
-      <nav className="flex-1 overflow-y-auto px-3 pb-4 scrollbar-thin">
-        <NavSection title="Extract" items={primaryNav} current={current} onNavigate={onNavigate} />
-        <NavSection title="Manage" items={manageNav} current={current} onNavigate={onNavigate} />
+      <nav
+        className={cn(
+          "flex-1 overflow-y-auto pb-4 scrollbar-thin",
+          collapsed ? "px-1.5" : "px-3"
+        )}
+      >
+        <NavSection
+          title="Extract"
+          items={primaryNav}
+          current={current}
+          onNavigate={onNavigate}
+          collapsed={collapsed}
+        />
+        <NavSection
+          title="Manage"
+          items={manageNav}
+          current={current}
+          onNavigate={onNavigate}
+          collapsed={collapsed}
+        />
         <NavSection
           title="Organization"
           items={adminNav}
           current={current}
           onNavigate={onNavigate}
+          collapsed={collapsed}
         />
       </nav>
 
-      <div className="border-t border-border px-5 py-3">
-        <p className="font-mono text-[11px] text-muted-foreground">v0.1.0 · internal</p>
+      <div
+        className={cn(
+          "border-t border-border",
+          collapsed ? "flex justify-center px-2 py-2" : "px-5 py-3"
+        )}
+      >
+        {collapsed ? (
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-label="Expand sidebar"
+            aria-expanded={false}
+            title="Expand sidebar"
+            className="flex h-7 w-7 items-center justify-center text-muted-foreground hover:text-foreground"
+          >
+            <PanelLeftOpen className="h-4 w-4" />
+          </button>
+        ) : (
+          <div className="flex items-center justify-between gap-2">
+            <p className="font-mono text-[11px] text-muted-foreground">v0.1.0 · internal</p>
+            <button
+              type="button"
+              onClick={onToggle}
+              aria-label="Collapse sidebar"
+              aria-expanded
+              title="Collapse sidebar"
+              className="flex h-7 w-7 items-center justify-center text-muted-foreground hover:text-foreground"
+            >
+              <PanelLeftClose className="h-4 w-4" />
+            </button>
+          </div>
+        )}
       </div>
     </>
   );
 }
 
-/** Desktop rail. Hidden below md — see MobileSidebar for the small-screen path. */
-export function Sidebar() {
+/** Desktop rail. Hidden below md — see MobileSidebar for the small-screen path.
+ *  Collapses to an icon rail (64px) and remembers the choice. */
+export function Sidebar({
+  collapsed = false,
+  onToggle,
+}: {
+  collapsed?: boolean;
+  onToggle?: () => void;
+}) {
   const pathname = usePathname();
   const current = activeHref(pathname);
   return (
-    <aside className="hidden w-60 shrink-0 flex-col border-r border-border bg-surface md:flex">
-      <SidebarBody current={current} />
+    <aside
+      className={cn(
+        "hidden shrink-0 flex-col border-r border-border bg-surface transition-[width] duration-150 md:flex",
+        collapsed ? "w-16" : "w-60"
+      )}
+    >
+      <SidebarBody current={current} collapsed={collapsed} onToggle={onToggle} />
     </aside>
   );
 }
@@ -219,7 +304,7 @@ export function MobileSidebar({ open, onClose }: { open: boolean; onClose: () =>
         onClick={onClose}
       />
       <aside className="relative flex h-full w-72 max-w-[85vw] flex-col border-r border-border bg-surface shadow-xl animate-fade-in">
-        <SidebarBody current={current} onNavigate={onClose} onClose={onClose} />
+        <SidebarBody current={current} onNavigate={onClose} onClose={onClose} collapsed={false} />
       </aside>
     </div>
   );

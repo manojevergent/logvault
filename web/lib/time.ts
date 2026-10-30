@@ -35,6 +35,24 @@ export function formatRange(start: number, end: number, tz: Tz = "UTC"): string 
 }
 
 /**
+ * The same inclusive range, short enough for a table cell: "10-28 07:24 → 08:24"
+ * within one day, "10-24 00:00 → 10-27 17:44" across days.
+ *
+ * The full form is ~40 characters and wrapped to five lines in the jobs table,
+ * which is what made every row tall. Callers keep the full `formatRange` in a
+ * title attribute so nothing is lost.
+ */
+export function formatRangeCompact(start: number, end: number, tz: Tz = "UTC"): string {
+  const from = formatEpoch(start, tz);
+  const to = formatEpoch(Math.max(start, end - 1), tz);
+  const fromDate = from.slice(5, 10);
+  const toDate = to.slice(5, 10);
+  return fromDate === toDate
+    ? `${fromDate} ${from.slice(11)} → ${to.slice(11)}`
+    : `${fromDate} ${from.slice(11)} → ${toDate} ${to.slice(11)}`;
+}
+
+/**
  * A span of seconds as a short human string: "45s", "12m 30s", "2h 14m",
  * "3d 4h". Jobs run for hours, so raw seconds ("8040s") are unreadable exactly
  * where the number matters most.

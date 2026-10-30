@@ -33,7 +33,7 @@ import {
   listJobs,
 } from "@/lib/api";
 import { isActive } from "@/lib/use-jobs";
-import { Tz, formatDuration, formatEpoch, formatRange, useTz } from "@/lib/time";
+import { Tz, formatDuration, formatEpoch, formatRange, formatRangeCompact, useTz } from "@/lib/time";
 
 type Tab = "all" | "previews" | JobStatus;
 
@@ -481,7 +481,7 @@ export default function JobsPage() {
             <table className="w-full text-sm">
               <thead className="sticky top-0 z-10 bg-surface text-xs uppercase tracking-wide text-muted-foreground shadow-[inset_0_-1px_0_hsl(var(--border))]">
                 <tr>
-                  <th className="w-8 px-3 py-1.5">
+                  <th className="w-8 px-2 py-1">
                     <input
                       type="checkbox"
                       aria-label="Select all cancelable jobs"
@@ -491,10 +491,10 @@ export default function JobsPage() {
                       className="h-3.5 w-3.5 accent-primary disabled:opacity-30"
                     />
                   </th>
-                  <th className="px-3 py-1.5 text-left font-medium">Status</th>
-                  <th className="px-3 py-1.5 text-left font-medium">Extraction</th>
-                  <th className="px-3 py-1.5 text-left font-medium">Customer</th>
-                  <th className="px-3 py-1.5 text-left font-medium">
+                  <th className="whitespace-nowrap px-2 py-1 text-left font-medium">Status</th>
+                  <th className="whitespace-nowrap px-2 py-1 text-left font-medium">Extraction</th>
+                  <th className="whitespace-nowrap px-2 py-1 text-left font-medium">Customer</th>
+                  <th className="whitespace-nowrap px-2 py-1 text-left font-medium">
                     <button
                       type="button"
                       onClick={() => setTz(tz === "IST" ? "UTC" : "IST")}
@@ -505,13 +505,13 @@ export default function JobsPage() {
                     </button>
                   </th>
                   <th
-                    className="px-3 py-1.5 text-left font-medium"
+                    className="whitespace-nowrap px-2 py-1 text-left font-medium"
                     title="Time since the job was submitted, or how long the run took"
                   >
                     Age
                   </th>
-                  <th className="px-3 py-1.5 text-right font-medium">Rows</th>
-                  <th className="px-3 py-1.5"></th>
+                  <th className="whitespace-nowrap px-2 py-1 text-right font-medium">Rows</th>
+                  <th className="px-2 py-1"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -611,7 +611,7 @@ const JobRow = React.memo(function JobRow({
   });
   return (
     <tr className={`hover:bg-accent/40 ${selected ? "bg-accent/30" : ""}`}>
-      <td className="px-3 py-1.5">
+      <td className="px-2 py-0.5">
         {/* Only an active job can be bulk-canceled, so a finished one gets no
             checkbox at all rather than a disabled one nobody can explain. */}
         {active && (
@@ -624,7 +624,7 @@ const JobRow = React.memo(function JobRow({
           />
         )}
       </td>
-      <td className="px-3 py-1.5">
+      <td className="whitespace-nowrap px-2 py-0.5">
         <div className="flex items-center gap-1.5">
           {job.status === "running" && (
             <span className="h-1.5 w-1.5 rounded-full bg-blue-400 animate-pulse" aria-hidden />
@@ -632,11 +632,14 @@ const JobRow = React.memo(function JobRow({
           <Badge tone={JOB_TONE[job.status]}>{job.status}</Badge>
         </div>
       </td>
-      <td className="px-3 py-1.5 text-xs" title={job.filter_spec?.label ?? undefined}>
+      <td
+        className="max-w-[22rem] truncate px-2 py-0.5 text-xs"
+        title={job.filter_spec?.label ?? undefined}
+      >
         {extractionName(job) ?? <span className="opacity-40">—</span>}
       </td>
       <td
-        className="px-3 py-1.5 text-xs"
+        className="max-w-[12rem] truncate px-2 py-0.5 text-xs"
         title={`Region ${job.region_code}`}
       >
         {job.filter_spec?.customer?.trim() ? (
@@ -645,11 +648,14 @@ const JobRow = React.memo(function JobRow({
           <span className="opacity-40">—</span>
         )}
       </td>
-      <td className="px-3 py-1.5 font-mono text-xs text-muted-foreground">
-        {formatRange(job.start_epoch, job.end_epoch, tz)}
+      <td
+        className="whitespace-nowrap px-2 py-0.5 font-mono text-xs text-muted-foreground"
+        title={formatRange(job.start_epoch, job.end_epoch, tz)}
+      >
+        {formatRangeCompact(job.start_epoch, job.end_epoch, tz)}
       </td>
       <td
-        className="px-3 py-1.5 font-mono text-xs text-muted-foreground"
+        className="whitespace-nowrap px-2 py-0.5 font-mono text-xs text-muted-foreground"
         title={`Submitted ${formatEpoch(submitted / 1000, tz)} ${tz}${
           ran != null ? ` · ran ${formatDuration(ran)}` : ""
         }`}
@@ -658,15 +664,24 @@ const JobRow = React.memo(function JobRow({
           ? `ran ${formatDuration(ran)}`
           : `${formatDuration((now - submitted) / 1000)} ago`}
       </td>
-      <td className={`px-3 py-1.5 text-right font-mono text-xs ${active ? "tabular-nums" : ""}`}>
+      <td
+        className={`whitespace-nowrap px-2 py-0.5 text-right font-mono text-xs ${
+          active ? "tabular-nums" : ""
+        }`}
+      >
         {job.rows_written.toLocaleString()}
       </td>
-      <td className="px-3 py-1.5">
-        <div className="flex items-center justify-end gap-1.5">
+      <td className="px-2 py-0.5">
+        <div className="flex items-center justify-end gap-0.5">
           {job.download_url && (
             <a href={`${API_BASE}${job.download_url}`} aria-label={`Download job ${job.id}`}>
-              <Button size="icon" variant="ghost" title={`Download ${job.output_format.toUpperCase()}`}>
-                <Download className="h-4 w-4" />
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-6 w-6"
+                title={`Download ${job.output_format.toUpperCase()}`}
+              >
+                <Download className="h-3.5 w-3.5" />
               </Button>
             </a>
           )}
@@ -698,10 +713,10 @@ const JobRow = React.memo(function JobRow({
                 variant="ghost"
                 aria-label={`Delete files for job ${job.id}`}
                 title="Delete extracted output files from disk"
-                className="hover:text-danger"
+                className="h-6 w-6 hover:text-danger"
                 onClick={() => setConfirmDelete(true)}
               >
-                <Trash2 className="h-4 w-4" />
+                <Trash2 className="h-3.5 w-3.5" />
               </Button>
             ))}
           <Button
@@ -709,15 +724,21 @@ const JobRow = React.memo(function JobRow({
             variant="ghost"
             aria-label={`Export job ${job.id} config`}
             title="Export config as JSON"
+            className="h-6 w-6"
             onClick={async () =>
               downloadJson(`${job.filter_spec?.label || `job_${job.id}`}.json`, await exportJob(job.id))
             }
           >
-            <FileDown className="h-4 w-4" />
+            <FileDown className="h-3.5 w-3.5" />
           </Button>
           <Link href={`/jobs/${job.id}`}>
-            <Button size="icon" variant="ghost" aria-label={`Open job ${job.id}`}>
-              <ArrowRight className="h-4 w-4" />
+            <Button
+              size="icon"
+              variant="ghost"
+              aria-label={`Open job ${job.id}`}
+              className="h-6 w-6"
+            >
+              <ArrowRight className="h-3.5 w-3.5" />
             </Button>
           </Link>
         </div>
