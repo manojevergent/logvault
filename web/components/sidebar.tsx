@@ -86,8 +86,8 @@ function NavLink({
       aria-label={collapsed ? item.label : undefined}
       title={collapsed ? item.label : undefined}
       className={cn(
-        "group flex items-center gap-3 py-2 text-sm font-medium transition-colors duration-150",
-        collapsed ? "justify-center px-0" : "px-3",
+        "group flex items-center gap-2.5 py-1.5 text-[13px] font-medium transition-colors duration-150",
+        collapsed ? "justify-center px-0" : "px-2.5",
         active
           ? "bg-primary/10 font-semibold text-primary"
           : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
@@ -122,7 +122,7 @@ function NavSection({
       {collapsed ? (
         <div className="mx-2 my-1 border-t border-border" aria-hidden />
       ) : (
-        <p className="px-3 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+        <p className="px-2.5 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
           {title}
         </p>
       )}
@@ -156,8 +156,8 @@ function SidebarBody({
     <>
       <div
         className={cn(
-          "flex h-14 items-center gap-2.5 border-b border-border",
-          collapsed ? "justify-center px-2" : "justify-between px-5"
+          "flex h-[52px] items-center gap-2.5 border-b border-border",
+          collapsed ? "justify-center px-2" : "justify-between px-3.5"
         )}
       >
         <div className="flex items-center gap-2.5">
@@ -182,8 +182,8 @@ function SidebarBody({
 
       <nav
         className={cn(
-          "flex-1 overflow-y-auto pb-4 scrollbar-thin",
-          collapsed ? "px-1.5" : "px-3"
+          "flex-1 overflow-y-auto pb-3 scrollbar-thin",
+          collapsed ? "px-1.5" : "px-2"
         )}
       >
         <NavSection
@@ -212,7 +212,7 @@ function SidebarBody({
       <div
         className={cn(
           "border-t border-border",
-          collapsed ? "flex justify-center px-2 py-2" : "px-5 py-3"
+          collapsed ? "flex justify-center px-2 py-2" : "px-3.5 py-2.5"
         )}
       >
         {collapsed ? (
@@ -260,8 +260,10 @@ export function Sidebar({
   return (
     <aside
       className={cn(
+        // 15% tighter than the original 240px, with the internal rhythm
+        // (gaps, padding) scaled to match so it reads denser, not cramped.
         "hidden shrink-0 flex-col border-r border-border bg-surface transition-[width] duration-150 md:flex",
-        collapsed ? "w-16" : "w-60"
+        collapsed ? "w-16" : "w-[204px]"
       )}
     >
       <SidebarBody current={current} collapsed={collapsed} onToggle={onToggle} />
