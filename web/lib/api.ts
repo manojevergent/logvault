@@ -355,6 +355,16 @@ export type JobStats = {
 /** True totals across the whole table — the list itself is page-limited. */
 export const getJobStats = () => req<JobStats>("/jobs/stats");
 
+export type CustomerDeleteResult = {
+  customer: string;
+  deleted_jobs: number;
+  deleted_files: number;
+};
+
+/** A customer is a label on jobs — deleting one deletes its jobs and files. */
+export const deleteCustomer = (name: string) =>
+  req<CustomerDeleteResult>(`/customers?name=${encodeURIComponent(name)}`, { method: "DELETE" });
+
 export const getJob = (id: number) => req<Job>(`/jobs/${id}`);
 export const createJob = (body: JobCreateInput) =>
   req<Job>("/jobs", { method: "POST", body: JSON.stringify(body) });

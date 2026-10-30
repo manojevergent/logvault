@@ -355,6 +355,12 @@ class JobStats(BaseModel):
     previews: int
 
 
+class CustomerDeleteResult(BaseModel):
+    customer: str
+    deleted_jobs: int
+    deleted_files: int
+
+
 # ── admin ─────────────────────────────────────────────────────────────────────
 
 

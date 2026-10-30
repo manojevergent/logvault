@@ -1,15 +1,17 @@
 "use client";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, Download, RefreshCw, ArrowRight } from "lucide-react";
+import { ChevronDown, ChevronRight, Download, Loader2, RefreshCw, ArrowRight, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import * as React from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { API_BASE, JOB_TONE, Job, retryJob } from "@/lib/api";
-import { useJobs } from "@/lib/use-jobs";
+import { API_BASE, JOB_TONE, Job, deleteCustomer, retryJob } from "@/lib/api";
+import { isActive, useJobs } from "@/lib/use-jobs";
 import { Tz, formatRange, useTz } from "@/lib/time";
+
+const UNASSIGNED = "(unassigned)";
 
 // ── grouping ──────────────────────────────────────────────────────────────────
 
@@ -90,11 +92,27 @@ export default function CustomersPage() {
     return next;
   }
 
+  // Deleting a customer means deleting its jobs (and the files they left);
+  // a customer is only a label on jobs, not a row of its own.
+  const qc = useQueryClient();
+  const [confirmDelete, setConfirmDelete] = React.useState<string | null>(null);
+  const del = useMutation({
+    mutationFn: (customer: string) => deleteCustomer(customer),
+    onSuccess: () => {
+      setConfirmDelete(null);
+      qc.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
+
   if (isLoading)
     return (
       <div className="mx-auto max-w-4xl animate-pulse-soft px-6 py-4" aria-busy>
         <div className="mb-3 h-4 w-32 bg-muted" />
-        <div className="space-y-2">
+      {del.isError && (
+        <p className="pb-2 text-xs text-danger">{(del.error as Error).message}</p>
+      )}
+
+      <div className="space-y-2">
           {Array.from({ length: 4 }).map((_, i) => (
             <div key={i} className="h-11 border border-border bg-muted/40" />
           ))}
@@ -147,26 +165,78 @@ export default function CustomersPage() {
           const months = grouped[customer];
           const isOpen = openCustomers.has(customer);
           const total = jobCount(months);
+          const hasActive = Object.values(months)
+            .flatMap(Object.values)
+            .flat()
+            .some(isActive);
+          const isUnassigned = customer === UNASSIGNED;
+          const confirming = confirmDelete === customer;
           return (
             <div key={customer} className="border border-border">
-              {/* Customer row */}
-              <button
-                type="button"
-                onClick={() => setOpenCustomers(toggle(openCustomers, customer))}
-                className="flex w-full items-center justify-between px-4 py-2.5 text-left hover:bg-accent/40"
-              >
-                <div className="flex items-center gap-2">
+              {/* Customer row: toggle on the left, actions on the right. A
+                  nested <button> is invalid HTML, so the row is a div. */}
+              <div className="flex w-full items-center justify-between gap-2 px-4 py-2.5 hover:bg-accent/40">
+                <button
+                  type="button"
+                  onClick={() => setOpenCustomers(toggle(openCustomers, customer))}
+                  aria-expanded={isOpen}
+                  className="flex flex-1 items-center gap-2 text-left"
+                >
                   {isOpen ? (
                     <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
                   ) : (
                     <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
                   )}
                   <span className="text-sm font-semibold">{customer}</span>
+                </button>
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="font-mono text-xs text-muted-foreground">
+                    {total} job{total === 1 ? "" : "s"}
+                  </span>
+                  {!isUnassigned &&
+                    (confirming ? (
+                      <span className="flex items-center gap-1 border border-danger/60 bg-muted px-1.5 py-0.5">
+                        <span className="text-[11px] font-medium text-danger">
+                          Delete {total} job{total === 1 ? "" : "s"}?
+                        </span>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-5 px-1.5 text-xs text-danger hover:bg-danger/20"
+                          onClick={() => del.mutate(customer)}
+                          disabled={del.isPending}
+                          title="Deletes these jobs, their CSV/ZIP files and value stores"
+                        >
+                          {del.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Yes"}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-5 px-1.5 text-xs text-muted-foreground"
+                          onClick={() => setConfirmDelete(null)}
+                        >
+                          No
+                        </Button>
+                      </span>
+                    ) : (
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-6 w-6 hover:text-danger"
+                        aria-label={`Delete customer ${customer}`}
+                        title={
+                          hasActive
+                            ? "Cancel this customer's queued/running jobs first"
+                            : `Delete ${customer} and its ${total} job${total === 1 ? "" : "s"}`
+                        }
+                        disabled={hasActive}
+                        onClick={() => setConfirmDelete(customer)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    ))}
                 </div>
-                <span className="font-mono text-xs text-muted-foreground">
-                  {total} job{total === 1 ? "" : "s"}
-                </span>
-              </button>
+              </div>
 
               {isOpen && (
                 <div className="border-t border-border">

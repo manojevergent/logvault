@@ -15,6 +15,7 @@ from app.routers import (
     admin,
     auth,
     credentials,
+    customers,
     health,
     indexes,
     jobs,
@@ -72,6 +73,7 @@ app.include_router(labels.router, dependencies=_auth_dep)
 app.include_router(admin.router, dependencies=_auth_dep)
 app.include_router(templates.router, dependencies=_auth_dep)
 app.include_router(log_formats.router, dependencies=_auth_dep)
+app.include_router(customers.router, dependencies=_auth_dep)
 
 
 @app.get("/", tags=["meta"])
