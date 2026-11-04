@@ -101,6 +101,8 @@ class FilterTemplateCreate(BaseModel):
     name: str
     phrases: list[str] = []
     ids: list[str] = []
+    # Quoted phrases matched adjacently (sent as regexes); see pipeline.py.
+    exact_phrases: list[str] = []
     message_types: list[str] = []
     aggregation: AggregationSpec | None = None
     customer: str = ""
@@ -118,6 +120,7 @@ class FilterTemplateOut(BaseModel):
     name: str
     phrases: list[str]
     ids: list[str]
+    exact_phrases: list[str] = []
     message_types: list[str]
     aggregation: dict | None = None
     customer: str | None = None
@@ -217,6 +220,8 @@ class JobCreate(BaseModel):
     id_batch_size: int = 100
     phrases: list[str] = []
     ids: list[str] = []
+    # Quoted phrases matched adjacently (sent as regexes); see pipeline.py.
+    exact_phrases: list[str] = []
     message_types: list[str] = []
     output_format: Literal["csv", "jsonl"] = "csv"
     is_preview: bool = False
@@ -291,6 +296,8 @@ class JobExport(BaseModel):
     output_format: str = "csv"
     phrases: list[str] = []
     ids: list[str] = []
+    # Quoted phrases matched adjacently (sent as regexes); see pipeline.py.
+    exact_phrases: list[str] = []
     message_types: list[str] = []
     aggregation: AggregationSpec | None = None
 
@@ -404,6 +411,8 @@ class ScheduleCreate(BaseModel):
     output_format: Literal["csv", "jsonl", "bigquery"] = "csv"
     phrases: list[str] = []
     ids: list[str] = []
+    # Quoted phrases matched adjacently (sent as regexes); see pipeline.py.
+    exact_phrases: list[str] = []
     enabled: bool = True
     aggregation: AggregationSpec | None = None
     customer: str = ""
@@ -464,6 +473,8 @@ class ScheduleExport(BaseModel):
     output_format: str = "csv"
     phrases: list[str] = []
     ids: list[str] = []
+    # Quoted phrases matched adjacently (sent as regexes); see pipeline.py.
+    exact_phrases: list[str] = []
     customer: str = ""
     aggregation: AggregationSpec | None = None
     alert_recipients: list[str] = []

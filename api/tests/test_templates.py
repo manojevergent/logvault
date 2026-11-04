@@ -41,6 +41,21 @@ def _create(client, name="Entitlements SPID", **over):
     return client.post("/templates", json=body)
 
 
+def test_exact_phrases_round_trip(client):
+    resp = client.post(
+        "/templates",
+        json={
+            "name": "status 502",
+            "phrases": ["getStatusCode"],
+            "exact_phrases": ["API : 502"],
+            "customer": "Shahid",
+        },
+    )
+    assert resp.status_code == 201
+    assert resp.json()["exact_phrases"] == ["API : 502"]
+    assert client.get("/templates").json()[0]["exact_phrases"] == ["API : 502"]
+
+
 def test_a_saved_search_requires_a_customer(client):
     resp = client.post(
         "/templates", json={"name": "no customer", "phrases": ["ClassName"], "customer": ""}
@@ -370,3 +385,4 @@ def test_update_can_still_change_a_hidden_field_via_a_direct_api_call(client):
         json={"name": "x", "aggregation": {**_AGG, "raw_columns": ["spid"]}},
     )
     assert resp.json()["aggregation"]["raw_columns"] == ["spid"]
+

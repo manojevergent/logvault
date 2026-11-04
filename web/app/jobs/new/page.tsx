@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FieldGroup, Input, Label, fieldClass } from "@/components/ui/input";
 import { OutputColumnsEditor, orderBySeq, suggestUniformLayout } from "@/components/output-columns-editor";
 import { TemplatePicker } from "@/components/template-picker";
-import { extractGroupNames } from "@/lib/aggregation";
+import { exactPhraseRegex, extractGroupNames, parsePhraseInput } from "@/lib/aggregation";
 import {
   FilterTemplate,
   createJob,
@@ -73,9 +73,19 @@ function fmtEstimate(chunks: number): string {
 // Mirrors the backend pipeline builder for the preview panel (§2.4–2.7).
 // Always wraps in $and — bare operators at query root return 0 rows silently.
 const esc = (s: string) => s.replace(/([.^$*+?()[\]{}|\\])/g, "\\$1");
-function buildPipeline(phrases: string[], ids: string[], messageTypes: string[]) {
+function buildPipeline(
+  phrases: string[],
+  ids: string[],
+  messageTypes: string[],
+  exactPhrases: string[] = []
+) {
   const allPhrases = [...phrases, ...messageTypes];
   const clauses: unknown[] = allPhrases.map((p) => ({ $contains: ["Body", p] }));
+  // Quoted phrases: adjacent tokens, so "API : 502" cannot be satisfied by a
+  // stray 502 elsewhere in the line.
+  for (const phrase of exactPhrases) {
+    clauses.push({ $regex: ["Body", exactPhraseRegex(phrase)] });
+  }
   if (ids.length) clauses.push({ $regex: ["Body", ids.map(esc).join("|")] });
   if (clauses.length === 0) return null;
   return [{ query: { $and: clauses }, type: "filter" }];
@@ -109,6 +119,9 @@ export default function NewJobPage() {
   const [customEnd, setCustomEnd] = React.useState(epochToLocal(nowSec, "UTC"));
 
   const [phrases, setPhrases] = React.useState<string[]>([]);
+  // Quoted phrases ("API : 502"): adjacent tokens, matched as a regex. Without
+  // this, "$contains 502" also matches the 502 inside a millisecond timestamp.
+  const [exactPhrases, setExactPhrases] = React.useState<string[]>([]);
   const [phraseInput, setPhraseInput] = React.useState("");
   const [idsText, setIdsText] = React.useState("");
   const [messageTypesText, setMessageTypesText] = React.useState("");
@@ -117,14 +130,20 @@ export default function NewJobPage() {
   // without them, against a far larger set, and nobody found out until hours
   // later. Anything in the box counts — it's committed on blur, and folded in
   // here so a click straight from the box to "Run extraction" can't lose it.
-  const pendingWords = React.useMemo(() => splitWords(phraseInput), [phraseInput]);
+  const pending = React.useMemo(() => parsePhraseInput(phraseInput), [phraseInput]);
+  const pendingWords = pending.words;
   const effectivePhrases = React.useMemo(
     () => [...phrases, ...pendingWords],
     [phrases, pendingWords]
   );
+  const effectiveExact = React.useMemo(
+    () => [...exactPhrases, ...pending.exact],
+    [exactPhrases, pending.exact]
+  );
   function commitPhraseInput() {
-    if (pendingWords.length === 0) return;
-    setPhrases((prev) => [...prev, ...pendingWords]);
+    if (pendingWords.length === 0 && pending.exact.length === 0) return;
+    if (pendingWords.length > 0) setPhrases((prev) => [...prev, ...pendingWords]);
+    if (pending.exact.length > 0) setExactPhrases((prev) => [...prev, ...pending.exact]);
     setPhraseInput("");
   }
 
@@ -145,6 +164,7 @@ export default function NewJobPage() {
   function applyTemplate(tpl: FilterTemplate) {
     setSearchLabel(tpl.name);
     setPhrases(tpl.phrases);
+    setExactPhrases(tpl.exact_phrases ?? []);
     setIdsText(tpl.ids.join("\n"));
     setMessageTypesText(tpl.message_types.join("\n"));
     // The regex is the laborious part of a search, so a saved one comes back
@@ -192,6 +212,7 @@ export default function NewJobPage() {
         name,
         phrases: effectivePhrases,
         ids,
+        exact_phrases: effectiveExact,
         message_types: messageTypes,
         customer,
         // Remember where this search was built, so batch runs and future
@@ -233,6 +254,7 @@ export default function NewJobPage() {
         name: templates?.find((t) => t.id === templateId)?.name ?? "",
         phrases: effectivePhrases,
         ids,
+        exact_phrases: effectiveExact,
         message_types: messageTypes,
         customer,
         credential_id: effectiveCredentialId === "" ? null : Number(effectiveCredentialId),
@@ -468,6 +490,7 @@ export default function NewJobPage() {
     setRegion(cloneJob.region_code);
     setIndexId(cloneJob.index_target_id);
     setPhrases((cloneJob.filter_spec.phrases ?? []).flatMap(splitWords));
+    setExactPhrases(cloneJob.filter_spec.exact_phrases ?? []);
     setIdsText((cloneJob.filter_spec.ids ?? []).join("\n"));
     setMessageTypesText((cloneJob.filter_spec.message_types ?? []).join("\n"));
     setChunkHours(cloneJob.chunk_hours);
@@ -538,13 +561,15 @@ export default function NewJobPage() {
   const validRange = end > start;
   const totalChunks = validRange ? Math.ceil((end - start) / (chunkHours * 3600)) : 0;
   const batches = Math.ceil(ids.length / batchSize) || 0;
-  const pipeline = buildPipeline(effectivePhrases, ids, messageTypes);
+  const pipeline = buildPipeline(effectivePhrases, ids, messageTypes, effectiveExact);
 
   // Spelled out next to the button so it's obvious the regex travels with the
   // search — it lives in a section far below this one.
   const savedParts = [
     effectivePhrases.length > 0 &&
       `${effectivePhrases.length} word${effectivePhrases.length === 1 ? "" : "s"}`,
+    effectiveExact.length > 0 &&
+      `${effectiveExact.length} exact phrase${effectiveExact.length === 1 ? "" : "s"}`,
     ids.length > 0 && `${ids.length} ID${ids.length === 1 ? "" : "s"}`,
     messageTypes.length > 0 && `${messageTypes.length} message type${messageTypes.length === 1 ? "" : "s"}`,
     aggEnabled && aggRegex.trim() !== "" && "the parse pattern",
@@ -571,6 +596,7 @@ export default function NewJobPage() {
         id_batch_size: batchSize,
         phrases: effectivePhrases,
         ids,
+        exact_phrases: effectiveExact,
         message_types: messageTypes,
         output_format: format,
         is_preview: preview,
@@ -931,17 +957,24 @@ export default function NewJobPage() {
                   commitPhraseInput();
                 }
               }}
-              placeholder="e.g. ClassName CGetEntitlementsCommand — press Enter"
+              placeholder={'e.g. ClassName CGetEntitlementsCommand  ·  "API : 502" for an exact phrase'}
             />
-            {pendingWords.length > 0 && (
+            <p className="text-xs text-muted-foreground">
+              Quote a phrase to require those tokens <strong>adjacent</strong> — {" "}
+              <span className="font-mono">&quot;API : 502&quot;</span>. Left unquoted, each word
+              may appear anywhere, so <span className="font-mono">502</span> would also match a
+              timestamp.
+            </p>
+            {(pendingWords.length > 0 || pending.exact.length > 0) && (
               <p className="text-xs text-muted-foreground">
-                {pendingWords.join(" + ")} will be included in this run.
+                {[...pendingWords, ...pending.exact.map((p) => `"${p}"`)].join(" + ")} will be
+                included in this run.
               </p>
             )}
             <div className="flex flex-wrap gap-1.5">
               {phrases.map((p, i) => (
                 <span
-                  key={i}
+                  key={`w${i}`}
                   className="inline-flex items-center gap-1 bg-muted px-2.5 py-0.5 text-xs"
                 >
                   {p}
@@ -949,6 +982,22 @@ export default function NewJobPage() {
                     type="button"
                     onClick={() => setPhrases(phrases.filter((_, j) => j !== i))}
                     aria-label={`Remove ${p}`}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+              {exactPhrases.map((p, i) => (
+                <span
+                  key={`e${i}`}
+                  className="inline-flex items-center gap-1 border border-primary/40 bg-primary/10 px-2.5 py-0.5 font-mono text-xs text-primary"
+                  title="Exact phrase — these tokens must be adjacent"
+                >
+                  &quot;{p}&quot;
+                  <button
+                    type="button"
+                    onClick={() => setExactPhrases(exactPhrases.filter((_, j) => j !== i))}
+                    aria-label={`Remove exact phrase ${p}`}
                   >
                     <X className="h-3 w-3" />
                   </button>
@@ -1386,3 +1435,4 @@ function Field({
     </FieldGroup>
   );
 }
+

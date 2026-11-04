@@ -234,6 +234,7 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
         end_epoch=job["end_epoch"],
         phrases=(job["filter_spec"] or {}).get("phrases", [])
         + (job["filter_spec"] or {}).get("message_types", []),
+        exact_phrases=(job["filter_spec"] or {}).get("exact_phrases", []),
         ids=(job["filter_spec"] or {}).get("ids", []),
         chunk_hours=job["chunk_hours"],
         id_batch_size=job["id_batch_size"],

@@ -229,6 +229,11 @@ function TemplateCard({
                 {p}
               </Badge>
             ))}
+            {(tpl.exact_phrases ?? []).map((p, i) => (
+              <Badge key={`e${i}`} tone="info">
+                <span className="font-mono">&quot;{p}&quot;</span>
+              </Badge>
+            ))}
             {tpl.ids.length > 0 && (
               <Badge tone="neutral">
                 {tpl.ids.length} ID{tpl.ids.length === 1 ? "" : "s"}
@@ -333,6 +338,7 @@ function TemplateEditForm({
   const [customer, setCustomer] = React.useState(tpl.customer ?? "");
   const [phrasesText, setPhrasesText] = React.useState(tpl.phrases.join(", "));
   const [idsText, setIdsText] = React.useState(tpl.ids.join(", "));
+  const [exactText, setExactText] = React.useState((tpl.exact_phrases ?? []).join(", "));
   const [messageTypesText, setMessageTypesText] = React.useState(tpl.message_types.join(", "));
 
   const [aggEnabled, setAggEnabled] = React.useState(agg?.enabled ?? false);
@@ -482,6 +488,7 @@ function TemplateEditForm({
         name: name.trim(),
         phrases: splitCsv(phrasesText),
         ids: splitCsv(idsText),
+        exact_phrases: splitCsv(exactText),
         message_types: splitCsv(messageTypesText),
         customer: customer.trim(),
         credential_id: resolvedSource.credential_id,
@@ -571,6 +578,18 @@ function TemplateEditForm({
           )}
           <Field label="Phrases (comma-separated)" className="sm:col-span-2">
             <Input value={phrasesText} onChange={(e) => setPhrasesText(e.target.value)} />
+          </Field>
+          <Field label="Exact phrases (comma-separated)" className="sm:col-span-2">
+            <Input
+              value={exactText}
+              onChange={(e) => setExactText(e.target.value)}
+              placeholder="API : 502"
+            />
+            <p className="text-xs text-muted-foreground">
+              These tokens must appear <strong>adjacent</strong> (matched as a regex). Use this
+              instead of loose words when a number also occurs elsewhere in the line, e.g. in a
+              timestamp.
+            </p>
           </Field>
           <Field label="IDs (comma-separated)" className="sm:col-span-2">
             <Input value={idsText} onChange={(e) => setIdsText(e.target.value)} />
@@ -1128,3 +1147,4 @@ function BatchDialog({
     </div>
   );
 }
+

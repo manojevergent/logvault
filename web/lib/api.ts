@@ -166,6 +166,8 @@ export type FilterTemplate = {
   name: string;
   phrases: string[];
   ids: string[];
+  /** Quoted phrases matched adjacently (sent as regexes). */
+  exact_phrases?: string[];
   message_types: string[];
   /** Saved parse & aggregate config — the regex comes back with the search. */
   aggregation: AggregationSpec | null;
@@ -183,6 +185,8 @@ export type FilterTemplateInput = {
   name: string;
   phrases: string[];
   ids: string[];
+  /** Quoted phrases matched adjacently (sent as regexes). */
+  exact_phrases?: string[];
   message_types: string[];
   aggregation?: AggregationSpec | null;
   customer?: string;
@@ -254,6 +258,7 @@ export type Job = {
   filter_spec: {
     phrases: string[];
     ids: string[];
+    exact_phrases?: string[];
     message_types?: string[];
     aggregation?: AggregationSpec;
     /** Saved-search or schedule name; also names the downloads. */
@@ -301,6 +306,8 @@ export type JobCreateInput = {
   id_batch_size: number;
   phrases: string[];
   ids: string[];
+  /** Quoted phrases matched adjacently (sent as regexes). */
+  exact_phrases?: string[];
   message_types?: string[];
   output_format?: "csv" | "jsonl" | "bigquery";
   is_preview?: boolean;
@@ -429,6 +436,8 @@ export type JobExport = {
   output_format: "csv" | "jsonl";
   phrases: string[];
   ids: string[];
+  /** Quoted phrases matched adjacently (sent as regexes). */
+  exact_phrases?: string[];
   message_types: string[];
   aggregation: AggregationSpec | null;
 };
@@ -448,6 +457,8 @@ export type ScheduleExport = {
   output_format: "csv" | "jsonl" | "bigquery";
   phrases: string[];
   ids: string[];
+  /** Quoted phrases matched adjacently (sent as regexes). */
+  exact_phrases?: string[];
   customer: string;
   aggregation: AggregationSpec | null;
   alert_recipients: string[];
@@ -607,6 +618,8 @@ export type ScheduleInput = {
   output_format: "csv" | "jsonl" | "bigquery";
   phrases: string[];
   ids: string[];
+  /** Quoted phrases matched adjacently (sent as regexes). */
+  exact_phrases?: string[];
   /** Parse & aggregate config, normally carried in from a saved search. */
   aggregation?: AggregationSpec | null;
   /** Groups this schedule's runs into one folder per customer. */

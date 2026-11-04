@@ -48,7 +48,11 @@ def create_schedule(
     user: User = Depends(get_current_user),
 ) -> Schedule:
     _check_aggregation(body.aggregation)
-    filter_spec = {"phrases": body.phrases, "ids": body.ids}
+    filter_spec = {
+        "phrases": body.phrases,
+        "ids": body.ids,
+        "exact_phrases": body.exact_phrases,
+    }
     if body.aggregation:
         filter_spec["aggregation"] = body.aggregation.model_dump()
     if body.customer:
@@ -159,6 +163,7 @@ def export_schedule(sid: int, db: Session = Depends(get_db)) -> ScheduleExport:
         output_format=s.output_format,
         phrases=fs.get("phrases", []),
         ids=fs.get("ids", []),
+        exact_phrases=fs.get("exact_phrases", []),
         customer=fs.get("customer", ""),
         aggregation=fs.get("aggregation"),
         alert_recipients=s.alert_recipients,
@@ -215,3 +220,4 @@ def delete_schedule(
     db.delete(_get_or_404(db, sid))
     audit.record(db, "delete", "schedule", sid, user_id=user.email)
     db.commit()
+

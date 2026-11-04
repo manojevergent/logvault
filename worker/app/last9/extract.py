@@ -31,6 +31,9 @@ class ExtractionSpec:
     start_epoch: int
     end_epoch: int
     phrases: list[str] = field(default_factory=list)
+    # Quoted phrases the user wants adjacent, e.g. "API : 502". Sent as regexes;
+    # `$contains` is word-based and would match a stray "502" anywhere.
+    exact_phrases: list[str] = field(default_factory=list)
     ids: list[str] = field(default_factory=list)
     chunk_hours: float = DEFAULT_CHUNK_HOURS
     id_batch_size: int = DEFAULT_ID_BATCH_SIZE
@@ -99,7 +102,7 @@ def iter_extraction(
 
         rows_in_chunk = 0
         for batch in batch_plan:
-            pipeline = build_filter_pipeline(spec.phrases, batch)
+            pipeline = build_filter_pipeline(spec.phrases, batch, exact_phrases=spec.exact_phrases)
             try:
                 for row in client.iter_rows(
                     index=spec.index,

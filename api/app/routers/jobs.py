@@ -175,6 +175,7 @@ def _new_job_row(
     id_batch_size: int,
     phrases: list[str],
     ids: list[str],
+    exact_phrases: list[str],
     message_types: list[str],
     output_format: str,
     is_preview: bool,
@@ -183,7 +184,12 @@ def _new_job_row(
     customer: str,
     created_by: str | None,
 ) -> Job:
-    filter_spec: dict = {"phrases": phrases, "ids": ids, "message_types": message_types}
+    filter_spec: dict = {
+        "phrases": phrases,
+        "ids": ids,
+        "exact_phrases": exact_phrases,
+        "message_types": message_types,
+    }
     if aggregation:
         filter_spec["aggregation"] = aggregation
     if label:
@@ -240,6 +246,7 @@ def create_job(
         id_batch_size=body.id_batch_size,
         phrases=body.phrases,
         ids=body.ids,
+        exact_phrases=body.exact_phrases,
         message_types=body.message_types,
         output_format=body.output_format,
         is_preview=body.is_preview,
@@ -330,6 +337,7 @@ def create_batch(
             id_batch_size=body.id_batch_size,
             phrases=list(tpl.phrases),
             ids=list(tpl.ids),
+            exact_phrases=list(tpl.exact_phrases),
             message_types=list(tpl.message_types),
             output_format=body.output_format,
             is_preview=body.is_preview,
@@ -391,6 +399,7 @@ def export_job(job_id: int, db: Session = Depends(get_db)) -> JobExport:
         output_format=job.output_format,
         phrases=fs.get("phrases", []),
         ids=fs.get("ids", []),
+        exact_phrases=fs.get("exact_phrases", []),
         message_types=fs.get("message_types", []),
         aggregation=fs.get("aggregation"),
     )
@@ -419,6 +428,7 @@ def import_job(body: JobExport, db: Session = Depends(get_db)) -> JobOut:
         id_batch_size=body.id_batch_size,
         phrases=body.phrases,
         ids=body.ids,
+        exact_phrases=body.exact_phrases,
         message_types=body.message_types,
         output_format=cast(Literal["csv", "jsonl"], body.output_format),
         aggregation=body.aggregation,
@@ -940,3 +950,4 @@ async def progress(job_id: int, exp: int, sig: str) -> StreamingResponse:
             await asyncio.sleep(1)
 
     return StreamingResponse(stream(), media_type="text/event-stream")
+

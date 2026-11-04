@@ -64,10 +64,16 @@ def _build_aggregation(body: FilterTemplateCreate, prior: dict | None) -> dict |
             "a saved search needs a customer name",
         )
     agg = body.aggregation if body.aggregation and body.aggregation.enabled else None
-    if not body.phrases and not body.ids and not body.message_types and not agg:
+    if (
+        not body.phrases
+        and not body.ids
+        and not body.exact_phrases
+        and not body.message_types
+        and not agg
+    ):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "a template needs at least one phrase, ID, message type, or a parse pattern",
+            "a template needs at least one phrase, exact phrase, ID, message type, or a parse pattern",
         )
     if not agg:
         return None
@@ -107,6 +113,7 @@ def create_template(
         name=body.name,
         phrases=body.phrases,
         ids=body.ids,
+        exact_phrases=body.exact_phrases,
         message_types=body.message_types,
         customer=body.customer.strip() or None,
         aggregation=agg_dict,
@@ -145,6 +152,7 @@ def update_template(
     tpl.name = body.name
     tpl.phrases = body.phrases
     tpl.ids = body.ids
+    tpl.exact_phrases = body.exact_phrases
     tpl.message_types = body.message_types
     tpl.customer = body.customer.strip() or None
     tpl.aggregation = agg_dict
@@ -178,3 +186,4 @@ def delete_template(
     db.delete(tpl)
     audit.record(db, "delete", "filter_template", template_id, user_id=user.email)
     db.commit()
+

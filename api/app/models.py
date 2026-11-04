@@ -207,6 +207,9 @@ class FilterTemplate(Base):
     name: Mapped[str] = mapped_column(String(120), unique=True)
     phrases: Mapped[list] = mapped_column(JSON, default=list)
     ids: Mapped[list] = mapped_column(JSON, default=list)
+    # Quoted phrases the user wants adjacent ("API : 502"). They are matched as
+    # regexes because $contains is word-based and would also match a stray token.
+    exact_phrases: Mapped[list] = mapped_column(JSON, default=list)
     message_types: Mapped[list] = mapped_column(JSON, default=list)
     credential_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     region_code: Mapped[str | None] = mapped_column(String(40), nullable=True)

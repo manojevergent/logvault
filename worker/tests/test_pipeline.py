@@ -38,6 +38,28 @@ def test_phrases_only_multiple_anded():
     assert q == {"$and": [{"$contains": ["Body", "a"]}, {"$contains": ["Body", "b"]}]}
 
 
+def test_exact_phrase_is_an_adjacent_regex_not_contains():
+    """$contains is word-based: "API : 502" as words also matched a stray 502 in
+    a millisecond timestamp, returning 200s. An exact phrase must be adjacency."""
+    q = build_filter_query(phrases=["getStatusCode"], exact_phrases=["API : 502"])
+    assert q == {
+        "$and": [
+            {"$contains": ["Body", "getStatusCode"]},
+            {"$regex": ["Body", "API\\s+:\\s+502"]},
+        ]
+    }
+
+
+def test_exact_phrase_escapes_regex_metacharacters():
+    q = build_filter_query(exact_phrases=["a.b (c)"])
+    assert q == {"$and": [{"$regex": ["Body", "a\\.b\\s+\\(c\\)"]}]}
+
+
+def test_exact_phrase_alone_is_enough():
+    q = build_filter_query(exact_phrases=["API : 502"])
+    assert q == {"$and": [{"$regex": ["Body", "API\\s+:\\s+502"]}]}
+
+
 def test_ids_only_is_single_regex_not_or():
     # §2.6 — the #1 gotcha: many IDs => ONE $regex alternation, never $or.
     q = build_filter_query(ids=["ID-A", "ID-B", "ID-C"])

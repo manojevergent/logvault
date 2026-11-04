@@ -42,17 +42,33 @@ def build_id_regex(ids: list[str]) -> str:
     return "|".join(esc(i) for i in ids)
 
 
+def exact_phrase_regex(phrase: str) -> str:
+    """A literal phrase, tolerant of any run of whitespace between its tokens.
+
+    `$contains` in Last9 is word-based, so a phrase like "API : 502" cannot be
+    expressed with it: sent as words it also matches a line whose *timestamp*
+    happens to contain "502". As a regex it means adjacency, which is what the
+    person typing the phrase meant.
+    """
+    tokens = [esc(t) for t in phrase.split()]
+    if not tokens:
+        raise PipelineError("an exact phrase cannot be empty")
+    return r"\s+".join(tokens)
+
+
 def build_filter_query(
     phrases: list[str] | None = None,
     ids: list[str] | None = None,
     field: str = BODY_FIELD,
+    exact_phrases: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build the ``query`` expression for one request.
 
     Always an `$and` of clauses, whatever the mode (§2.7):
-    - phrases only  -> `$and` of one `$contains` per phrase.
+    - phrases       -> one `$contains` per phrase (all must appear, any order).
+    - exact_phrases -> one `$regex` per phrase (tokens must appear adjacent).
     - IDs only      -> `$and` of the single `$regex` alternation clause.
-    - both          -> `$and` of the phrase clauses plus the regex clause.
+    - any mix       -> all of the above.
 
     Even a lone clause keeps the wrapper — see the note below; a bare operator at
     the query root returns 0 rows without erroring.
@@ -61,10 +77,12 @@ def build_filter_query(
     """
     phrases = phrases or []
     ids = ids or []
-    if not phrases and not ids:
-        raise PipelineError("a filter needs at least one phrase or one id")
+    exact_phrases = exact_phrases or []
+    if not phrases and not ids and not exact_phrases:
+        raise PipelineError("a filter needs at least one phrase, exact phrase or id")
 
     clauses: list[dict[str, Any]] = [contains_clause(p, field) for p in phrases]
+    clauses += [regex_clause(exact_phrase_regex(p), field) for p in exact_phrases]
     if ids:
         clauses.append(regex_clause(build_id_regex(ids), field))
 
@@ -85,6 +103,7 @@ def build_filter_pipeline(
     phrases: list[str] | None = None,
     ids: list[str] | None = None,
     field: str = BODY_FIELD,
+    exact_phrases: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Convenience: build the full pipeline for one phrases/ids batch."""
-    return build_pipeline(build_filter_query(phrases, ids, field))
+    return build_pipeline(build_filter_query(phrases, ids, field, exact_phrases))

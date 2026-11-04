@@ -35,6 +35,7 @@ def test_create_queues_job_and_stores_filter(client, monkeypatch):
     assert data["filter_spec"] == {
         "phrases": ["GetEntitlements"],
         "ids": ["ID-A", "ID-B"],
+        "exact_phrases": [],
         "message_types": [],
         "label": "TEST_SEARCH",
     }
