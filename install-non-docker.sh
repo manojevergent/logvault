@@ -149,9 +149,14 @@ set_env() {
 
 urlsafe_key() { head -c "$1" /dev/urandom | base64 | tr '+/' '-_' | tr -d '= \n'; }
 
-if [ "$(get_env LAST9_ENCRYPTION_KEY)" = "replace-with-generated-fernet-key" ] \
-    || [ -z "$(get_env LAST9_ENCRYPTION_KEY)" ]; then
-    set_env LAST9_ENCRYPTION_KEY "$(urlsafe_key 32)"
+# Fernet requires 32 bytes as url-safe base64 WITH padding (44 chars).
+# `urlsafe_key` strips the '=', which Fernet rejects — keep it for this key.
+fernet_key() { head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '\n'; }
+valid_fernet_key() { [ "${#1}" -eq 44 ] && printf '%s' "$1" | grep -qE '^[A-Za-z0-9+/_-]{43}=$'; }
+
+if ! valid_fernet_key "$(get_env LAST9_ENCRYPTION_KEY)"; then
+    # An invalid key never encrypted anything, so replacing it is safe.
+    set_env LAST9_ENCRYPTION_KEY "$(fernet_key)"
     ok "generated LAST9_ENCRYPTION_KEY"
 fi
 if [ "$(get_env JWT_SECRET)" = "replace-with-random-secret" ] \

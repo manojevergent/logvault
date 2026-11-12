@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     storage_dir: str = "/data/exports"
     export_retention_days: int = 30
     zip_exports: bool = True
+    # Comparison runs carry a full series plus raw provider rows each. Keep the
+    # newest N per saved comparison (history is for replaying recent checks, not
+    # an archive) so the table and its indexes stay small.
+    comparison_run_retention_count: int = 50
     # Wrap Excel-coerced values (long ids, timestamps) as ="..." so a
     # spreadsheet keeps them verbatim. OFF by default: those quotes and the
     # leading `=` become literal data for a warehouse loading the CSV. Turn on
@@ -37,6 +41,15 @@ class Settings(BaseSettings):
     # does not just fail itself — it stops Postgres writing and takes every other
     # job, every schedule and every login down with it. Refuse to start below this.
     min_free_disk_gb: int = 10
+
+    # Extraction slots. One slot = one job streaming at a time; the rest queue.
+    # Raising this multiplies Last9 request volume and per-process memory, so it
+    # is a deliberate capacity decision, not a default to maximise.
+    worker_concurrency: int = 4
+
+    # System health sampling/alerts. The sampler runs on the beat; thresholds and
+    # destinations live in the admin UI (app_settings "health_alerts").
+    health_check_interval_seconds: int = 60
     # A `running` job silent for this long is presumed dead. Generous on purpose:
     # a single request can legitimately retry for ~14 minutes (10 attempts,
     # backoff capped at 300s) without emitting an event.

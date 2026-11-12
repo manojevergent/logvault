@@ -1,6 +1,6 @@
 import pytest
 
-from app.last9.chunking import count_chunks, make_chunks
+from app.last9.chunking import PREVIEW_CHUNKS, count_chunks, make_chunks, preview_window_start
 
 HOUR = 3600
 
@@ -20,6 +20,22 @@ def test_final_chunk_is_truncated():
 
 def test_single_chunk_when_range_smaller_than_step():
     assert make_chunks(100, 200, chunk_hours=1) == [(100, 200)]
+
+
+def test_preview_samples_only_the_newest_chunks_of_a_long_window():
+    week = 7 * 24 * HOUR
+    start = preview_window_start(0, week, chunk_hours=1)
+    assert start == week - PREVIEW_CHUNKS * HOUR
+    assert make_chunks(start, week, chunk_hours=1) == [
+        (week - 3 * HOUR, week - 2 * HOUR),
+        (week - 2 * HOUR, week - HOUR),
+        (week - HOUR, week),
+    ]
+
+
+def test_preview_keeps_a_window_shorter_than_the_sample():
+    assert preview_window_start(0, 600, chunk_hours=1) == 0
+    assert make_chunks(0, 600, chunk_hours=1) == [(0, 600)]
 
 
 def test_count_matches_make():

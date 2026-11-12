@@ -27,7 +27,8 @@ export function setToken(token: string, role: string): void {
   localStorage.setItem("lv_role", role);
   // Secure only over HTTPS: setting it unconditionally would silently drop the
   // cookie on a plain-HTTP deployment and break sign-in with no error.
-  const secure = typeof location !== "undefined" && location.protocol === "https:" ? "; Secure" : "";
+  const secure =
+    typeof location !== "undefined" && location.protocol === "https:" ? "; Secure" : "";
   document.cookie = `lv_token=${token}; path=/; SameSite=Strict; max-age=86400${secure}`;
 }
 
@@ -155,8 +156,7 @@ export const updateIndex = (
     credential_id?: number | null;
     description?: string | null;
   }
-) =>
-  req<IndexTarget>(`/indexes/${id}`, { method: "PUT", body: JSON.stringify(body) });
+) => req<IndexTarget>(`/indexes/${id}`, { method: "PUT", body: JSON.stringify(body) });
 export const deleteIndex = (id: number) => req<void>(`/indexes/${id}`, { method: "DELETE" });
 
 // ── filter templates ("save the search") ────────────────────────────────────
@@ -168,6 +168,9 @@ export type FilterTemplate = {
   ids: string[];
   /** Quoted phrases matched adjacently (sent as regexes). */
   exact_phrases?: string[];
+  /** Logs containing any of these are excluded. */
+  exclude_phrases?: string[];
+  exclude_exact_phrases?: string[];
   message_types: string[];
   /** Saved parse & aggregate config — the regex comes back with the search. */
   aggregation: AggregationSpec | null;
@@ -177,6 +180,9 @@ export type FilterTemplate = {
   credential_id: number | null;
   region_code: string | null;
   index_target_id: number | null;
+  /** Optional default S3 destination for jobs created from this search. */
+  s3_profile_id: number | null;
+  s3_profile_label?: string | null;
   created_by: string | null;
   created_at: string;
 };
@@ -187,12 +193,16 @@ export type FilterTemplateInput = {
   ids: string[];
   /** Quoted phrases matched adjacently (sent as regexes). */
   exact_phrases?: string[];
+  /** Logs containing any of these are excluded. */
+  exclude_phrases?: string[];
+  exclude_exact_phrases?: string[];
   message_types: string[];
   aggregation?: AggregationSpec | null;
   customer?: string;
   credential_id?: number | null;
   region_code?: string | null;
   index_target_id?: number | null;
+  s3_profile_id?: number | null;
 };
 
 export const listTemplates = () => req<FilterTemplate[]>("/templates");
@@ -208,6 +218,8 @@ export type JobStatus = "queued" | "running" | "paused" | "completed" | "failed"
 
 export type AggregationSpec = {
   enabled: boolean;
+  /** False = parse only (extract fields, no group-by/distinct counts). */
+  aggregate?: boolean;
   regex: string;
   group_by: string[];
   unique_fields: string[];
@@ -238,6 +250,11 @@ export type AggregationResult = {
   unique_fields: string[];
   rows_matched: number;
   rows_unmatched: number;
+  // False for a parse-only run (regex extraction, no distinct counts).
+  aggregate?: boolean;
+  // First few unmatched lines, capped server-side; rows_unmatched is the total.
+  unmatched_samples?: { timestamp: string; message: string }[];
+  unmatched_sample_cap?: number;
   // groups is capped for display; total_groups is the real count. The complete
   // breakdown is the summary CSV (Job.summary_url).
   total_groups?: number;
@@ -260,6 +277,9 @@ export type Job = {
     ids: string[];
     exact_phrases?: string[];
     message_types?: string[];
+    /** Logs containing any of these are excluded. */
+    exclude_phrases?: string[];
+    exclude_exact_phrases?: string[];
     aggregation?: AggregationSpec;
     /** Saved-search or schedule name; also names the downloads. */
     label?: string;
@@ -293,6 +313,23 @@ export type Job = {
   // most frequent first — the pivot-table view, already pivoted.
   has_counts: boolean;
   counts_url: string | null;
+  // Every row the parse pattern failed to match (timestamp,message). The
+  // aggregation result only carries a small sample for display.
+  has_unmatched: boolean;
+  unmatched_url: string | null;
+  s3_profile_id: number | null;
+  s3_destination: {
+    profile_id: number;
+    name: string;
+    bucket: string;
+    region: string;
+    prefix: string;
+  } | null;
+  s3_uri: string | null;
+  s3_summary_uri: string | null;
+  s3_counts_uri: string | null;
+  s3_error: string | null;
+  s3_uploaded_at: string | null;
   rollup_of: { schedule_id: number; label?: string; source_job_ids?: number[] } | null;
 };
 
@@ -308,6 +345,9 @@ export type JobCreateInput = {
   ids: string[];
   /** Quoted phrases matched adjacently (sent as regexes). */
   exact_phrases?: string[];
+  /** Logs containing any of these are excluded. */
+  exclude_phrases?: string[];
+  exclude_exact_phrases?: string[];
   message_types?: string[];
   output_format?: "csv" | "jsonl" | "bigquery";
   is_preview?: boolean;
@@ -315,7 +355,9 @@ export type JobCreateInput = {
   label?: string;
   /** Groups the output files into one folder per customer. */
   customer?: string;
-  aggregation?: Omit<AggregationSpec, "skip_raw_output"> & { skip_raw_output?: boolean } | null;
+  /** Optional S3 destination profile. */
+  s3_profile_id?: number | null;
+  aggregation?: (Omit<AggregationSpec, "skip_raw_output"> & { skip_raw_output?: boolean }) | null;
 };
 
 export const JOB_TONE: Record<JobStatus, "neutral" | "info" | "warning" | "success" | "danger"> = {
@@ -338,10 +380,7 @@ export type ListJobsOptions = {
   status?: JobStatus;
 };
 
-export const listJobs = (
-  limit = 200,
-  opts: ListJobsOptions | boolean = {}
-) => {
+export const listJobs = (limit = 200, opts: ListJobsOptions | boolean = {}) => {
   // Boolean form kept for the older `listJobs(limit, true)` call site.
   const o: ListJobsOptions = typeof opts === "boolean" ? { includePreviews: opts } : opts;
   const q = new URLSearchParams({ limit: String(limit) });
@@ -401,6 +440,8 @@ export const resumeJob = (id: number) => req<Job>(`/jobs/${id}/resume`, { method
 export const cancelJob = (id: number) => req<Job>(`/jobs/${id}/cancel`, { method: "POST" });
 export const retryJob = (id: number) => req<Job>(`/jobs/${id}/retry`, { method: "POST" });
 export const deleteJobFiles = (id: number) => req<Job>(`/jobs/${id}/files`, { method: "DELETE" });
+/** Re-queue S3 delivery for a completed job (does not re-query Last9). */
+export const retryS3Upload = (id: number) => req<Job>(`/jobs/${id}/s3-upload`, { method: "POST" });
 
 export type BulkCancelResult = {
   canceled: number[];
@@ -438,8 +479,11 @@ export type JobExport = {
   ids: string[];
   /** Quoted phrases matched adjacently (sent as regexes). */
   exact_phrases?: string[];
+  exclude_phrases?: string[];
+  exclude_exact_phrases?: string[];
   message_types: string[];
   aggregation: AggregationSpec | null;
+  s3_profile?: { name: string } | null;
 };
 
 export type ScheduleExport = {
@@ -459,10 +503,13 @@ export type ScheduleExport = {
   ids: string[];
   /** Quoted phrases matched adjacently (sent as regexes). */
   exact_phrases?: string[];
+  exclude_phrases?: string[];
+  exclude_exact_phrases?: string[];
   customer: string;
   aggregation: AggregationSpec | null;
   alert_recipients: string[];
   bq_config: BQConfig | null;
+  s3_profile?: { name: string } | null;
 };
 
 export const exportJob = (id: number) => req<JobExport>(`/jobs/${id}/export`);
@@ -567,14 +614,90 @@ export type NotificationConfigOut = Omit<NotificationConfig, "smtp_password"> & 
   smtp_password_set: boolean;
 };
 
-export const getNotificationConfig = () =>
-  req<NotificationConfigOut>("/settings/notifications");
+export const getNotificationConfig = () => req<NotificationConfigOut>("/settings/notifications");
 
 // Blank smtp_password means "keep the stored one".
 export const updateNotificationConfig = (config: Partial<NotificationConfig>) =>
   req<{ ok: boolean; message: string }>("/settings/notifications", {
     method: "PATCH",
     body: JSON.stringify(config),
+  });
+
+// ── system health alerts ────────────────────────────────────────────────────
+
+export type HealthAlertConfig = {
+  enabled: boolean;
+  cpu_threshold_pct: number;
+  memory_threshold_pct: number;
+  disk_threshold_pct: number;
+  cooldown_minutes: number;
+  slack: boolean;
+  email: boolean;
+  recipients: string[];
+  notify_on_recovery: boolean;
+};
+
+export type HealthAlertConfigOut = HealthAlertConfig & { disk_path: string | null };
+
+export type HealthSample = {
+  available: boolean;
+  message?: string;
+  ts?: string;
+  cpu_pct?: number;
+  memory_pct?: number;
+  memory_used_mb?: number;
+  memory_total_mb?: number;
+  disk_pct?: number;
+  disk_free_gb?: number;
+  disk_total_gb?: number;
+  disk_path?: string;
+  load1?: number | null;
+  /** Active alert thresholds, so any signed-in user can colour the widget. */
+  thresholds?: { cpu: number; memory: number; disk: number };
+  enabled?: boolean;
+};
+
+export const getHealthAlertConfig = () => req<HealthAlertConfigOut>("/settings/health-alerts");
+export const updateHealthAlertConfig = (config: HealthAlertConfig) =>
+  req<{ ok: boolean; message: string }>("/settings/health-alerts", {
+    method: "PUT",
+    body: JSON.stringify(config),
+  });
+export type TestHealthAlertResult = {
+  ok: boolean;
+  message: string;
+  channels?: Record<string, { attempted: boolean; ok: boolean; reason?: string }>;
+  failed?: Record<string, string>;
+  skipped?: Record<string, string>;
+};
+
+export const testHealthAlert = () =>
+  req<TestHealthAlertResult>("/settings/health-alerts/test", { method: "POST" });
+export const getHealthMetrics = () => req<HealthSample>("/health/metrics");
+
+// ── worker capacity ─────────────────────────────────────────────────────────
+
+export type WorkerCapacity = {
+  configured: number;
+  running: number | null;
+  /** The limit the worker process started with; a live resize does not change it. */
+  started_with: number | null;
+  active_jobs: number;
+  nodes: number;
+  available: boolean;
+};
+
+export const getWorkerCapacity = () => req<WorkerCapacity>("/admin/worker");
+export const setWorkerConcurrency = (concurrency: number) =>
+  req<{
+    ok: boolean;
+    applied: boolean;
+    previous: number | null;
+    running?: number | null;
+    message: string;
+  }>("/admin/worker/concurrency", {
+    method: "POST",
+    body: JSON.stringify({ concurrency }),
   });
 
 // ── schedules (F1) ────────────────────────────────────────────────────────────
@@ -599,12 +722,21 @@ export type Schedule = {
   chunk_hours: number;
   id_batch_size: number;
   output_format: string;
-  filter_spec: { phrases: string[]; ids: string[]; aggregation?: { enabled: boolean } };
+  filter_spec: {
+    phrases: string[];
+    ids: string[];
+    exact_phrases?: string[];
+    exclude_phrases?: string[];
+    exclude_exact_phrases?: string[];
+    aggregation?: { enabled: boolean };
+  };
   last_run_at: string | null;
   created_at: string;
   last_run_job_id: number | null;
   bq_config: BQConfig | null;
   alert_recipients: string[];
+  s3_profile_id: number | null;
+  s3_profile_label: string | null;
 };
 
 export type ScheduleInput = {
@@ -620,6 +752,9 @@ export type ScheduleInput = {
   ids: string[];
   /** Quoted phrases matched adjacently (sent as regexes). */
   exact_phrases?: string[];
+  /** Logs containing any of these are excluded. */
+  exclude_phrases?: string[];
+  exclude_exact_phrases?: string[];
   /** Parse & aggregate config, normally carried in from a saved search. */
   aggregation?: AggregationSpec | null;
   /** Groups this schedule's runs into one folder per customer. */
@@ -627,6 +762,7 @@ export type ScheduleInput = {
   /** BigQuery destination config; null = no BQ load */
   bq_config?: BQConfig | null;
   alert_recipients?: string[];
+  s3_profile_id?: number | null;
 };
 
 // Combine a schedule's runs over a period into one job with exact cross-period
@@ -654,6 +790,7 @@ export const updateSchedule = (
     ids?: string[];
     alert_recipients?: string[];
     bq_config?: BQConfig | null;
+    s3_profile_id?: number | null;
   }
 ) => req<Schedule>(`/schedules/${id}`, { method: "PATCH", body: JSON.stringify(body) });
 export const toggleSchedule = (id: number) =>
@@ -703,3 +840,285 @@ export const deleteLogFormat = (id: number) =>
   req<void>(`/log-formats/${id}`, { method: "DELETE" });
 export const testLogFormat = (body: { regex: string; sample_line: string; hint?: string }) =>
   req<LogFormatTestResult>("/log-formats/test", { method: "POST", body: JSON.stringify(body) });
+
+// ── auto-detect (saved formats + saved-search patterns) ─────────────────────
+
+export type DetectedField = {
+  name: string;
+  /** Matched lines that produced a value for this field. */
+  coverage: number;
+  distinct: number;
+  sample: string;
+  /** Heuristic from the pasted sample: low cardinality groups, high counts. */
+  suggested: "group_by" | "unique" | "none";
+};
+
+export type DetectedCandidate = {
+  source: "library" | "saved_search";
+  id: number;
+  name: string;
+  regex: string;
+  hint: string | null;
+  priority: number;
+  matched: number;
+  fields: DetectedField[];
+  suggested_group_by: string[];
+  suggested_unique: string[];
+};
+
+export type InferredPattern = {
+  regex: string;
+  fields: DetectedField[];
+  suggested_group_by: string[];
+  suggested_unique: string[];
+  lines_used: number;
+};
+
+export type DetectResult = {
+  lines_analyzed: number;
+  matched: number;
+  unmatched: number;
+  candidates: DetectedCandidate[];
+  json_fields: DetectedField[];
+  /** A pattern built from the pasted lines when nothing saved matched. */
+  inferred: InferredPattern | null;
+  message: string | null;
+};
+
+export const detectLogFormats = (lines: string[]) =>
+  req<DetectResult>("/log-formats/detect", {
+    method: "POST",
+    body: JSON.stringify({ lines }),
+  });
+
+// ── New Relic connections ────────────────────────────────────────────────────
+
+export type NewRelicCredential = {
+  id: number;
+  label: string;
+  account_id: number;
+  region: "us" | "eu" | string;
+  api_key_preview: string;
+  created_by: string | null;
+  created_at: string;
+};
+
+export type NewRelicCredentialInput = {
+  label: string;
+  account_id: number;
+  region: "us" | "eu";
+  api_key: string;
+};
+
+export type NewRelicTestResult = {
+  ok: boolean;
+  message: string;
+  account_name: string | null;
+};
+
+export const listNewRelicCredentials = () => req<NewRelicCredential[]>("/newrelic/credentials");
+export const createNewRelicCredential = (body: NewRelicCredentialInput) =>
+  req<NewRelicCredential>("/newrelic/credentials", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+export const updateNewRelicCredential = (
+  id: number,
+  body: {
+    label?: string;
+    account_id?: number;
+    region?: "us" | "eu";
+    /** Blank/omitted keeps the stored key. */
+    api_key?: string;
+  }
+) =>
+  req<NewRelicCredential>(`/newrelic/credentials/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+export const deleteNewRelicCredential = (id: number) =>
+  req<void>(`/newrelic/credentials/${id}`, { method: "DELETE" });
+export const testNewRelicCredential = (id: number) =>
+  req<NewRelicTestResult>(`/newrelic/credentials/${id}/test`, { method: "POST" });
+
+// ── S3 destination profiles ─────────────────────────────────────────────────
+
+export type S3Profile = {
+  id: number;
+  name: string;
+  bucket: string;
+  region: string;
+  prefix: string;
+  endpoint_url: string | null;
+  key_preview: string | null;
+  force_path_style: boolean;
+  created_by: string | null;
+  created_at: string;
+};
+
+export type S3ProfileInput = {
+  name: string;
+  bucket: string;
+  region: string;
+  prefix?: string;
+  endpoint_url?: string | null;
+  access_key_id?: string | null;
+  secret_access_key?: string | null;
+  session_token?: string | null;
+  force_path_style?: boolean;
+};
+
+export type S3TestResult = { ok: boolean; message: string };
+
+export const listS3Profiles = () => req<S3Profile[]>("/s3-profiles");
+export const createS3Profile = (body: S3ProfileInput) =>
+  req<S3Profile>("/s3-profiles", { method: "POST", body: JSON.stringify(body) });
+export const updateS3Profile = (
+  id: number,
+  body: Partial<S3ProfileInput> & { clear_credentials?: boolean }
+) =>
+  req<S3Profile>(`/s3-profiles/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+export const deleteS3Profile = (id: number) =>
+  req<void>(`/s3-profiles/${id}`, { method: "DELETE" });
+export const testS3Profile = (id: number) =>
+  req<S3TestResult>(`/s3-profiles/${id}/test`, { method: "POST" });
+
+// ── Last9 vs New Relic comparisons ───────────────────────────────────────────
+
+export type Last9FilterSpec = {
+  phrases: string[];
+  ids: string[];
+  exact_phrases?: string[];
+  message_types: string[];
+};
+
+/** "sum" turns a count query into a total; avg/max/min/last compare gauges. */
+export type ComparisonValueMode = "sum" | "avg" | "max" | "min" | "last";
+
+export type ComparisonSummary = {
+  id: number;
+  name: string;
+  description: string | null;
+  last9_credential_id: number;
+  last9_index_target_id: number;
+  last9_region_code: string;
+  nr_credential_id: number;
+  nr_value_mode: ComparisonValueMode;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  last9_credential_label: string | null;
+  last9_index_name: string | null;
+  nr_credential_label: string | null;
+  nr_account_id: number | null;
+  last_run_at: string | null;
+  last_run_id: number | null;
+  last_run_status: string | null;
+  last_run_last9_total: number | null;
+  last_run_newrelic_total: number | null;
+};
+
+export type Comparison = ComparisonSummary & {
+  last9_pipeline: Record<string, unknown>[];
+  last9_filter_spec: Last9FilterSpec | null;
+  nrql: string;
+  nr_value_field: string | null;
+  bucket_seconds: number | null;
+};
+
+export type ComparisonList = {
+  items: ComparisonSummary[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type ComparisonInput = {
+  name: string;
+  description?: string;
+  last9_index_target_id: number;
+  last9_credential_id?: number | null;
+  last9_filter_spec?: Last9FilterSpec | null;
+  last9_pipeline?: Record<string, unknown>[] | null;
+  nr_credential_id: number;
+  nrql: string;
+  nr_value_mode?: ComparisonValueMode;
+  nr_value_field?: string | null;
+  bucket_seconds?: number | null;
+};
+
+export type ComparisonPoint = {
+  start_epoch: number;
+  end_epoch: number;
+  value: number;
+};
+
+export type ComparisonSide = {
+  ok: boolean;
+  error: string | null;
+  elapsed_ms: number | null;
+  total: number | null;
+  series: ComparisonPoint[];
+  raw: Record<string, unknown>[];
+  metadata: Record<string, unknown> | null;
+};
+
+export type ComparisonRunSummary = {
+  id: number;
+  comparison_id: number;
+  start_epoch: number;
+  end_epoch: number;
+  bucket_seconds: number;
+  status: "ok" | "partial" | "failed";
+  last9_ok: boolean;
+  last9_total: number | null;
+  newrelic_ok: boolean;
+  newrelic_total: number | null;
+  created_by: string | null;
+  created_at: string;
+};
+
+export type ComparisonRun = ComparisonRunSummary & {
+  last9: ComparisonSide;
+  newrelic: ComparisonSide;
+  nrql_effective: string | null;
+  last9_pipeline_effective: {
+    total?: Record<string, unknown>[] | null;
+    series?: Record<string, unknown>[] | null;
+    bucket_seconds?: number;
+    value_mode?: string;
+  } | null;
+  delta: number | null;
+  pct_diff: number | null;
+};
+
+export const listComparisons = (params?: { limit?: number; offset?: number; q?: string }) => {
+  const query = new URLSearchParams();
+  if (params?.limit != null) query.set("limit", String(params.limit));
+  if (params?.offset != null) query.set("offset", String(params.offset));
+  if (params?.q) query.set("q", params.q);
+  const suffix = query.toString();
+  return req<ComparisonList>(`/comparisons${suffix ? `?${suffix}` : ""}`);
+};
+export const getComparison = (id: number) => req<Comparison>(`/comparisons/${id}`);
+export const createComparison = (body: ComparisonInput) =>
+  req<Comparison>("/comparisons", { method: "POST", body: JSON.stringify(body) });
+export const updateComparison = (id: number, body: ComparisonInput) =>
+  req<Comparison>(`/comparisons/${id}`, { method: "PUT", body: JSON.stringify(body) });
+export const deleteComparison = (id: number) =>
+  req<void>(`/comparisons/${id}`, { method: "DELETE" });
+export const runComparison = (
+  id: number,
+  body: { start_epoch: number; end_epoch: number; bucket_seconds?: number | null }
+) =>
+  req<ComparisonRun>(`/comparisons/${id}/run`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+export const listComparisonRuns = (id: number, limit = 20) =>
+  req<ComparisonRunSummary[]>(`/comparisons/${id}/runs?limit=${limit}`);
+export const getComparisonRun = (comparisonId: number, runId: number) =>
+  req<ComparisonRun>(`/comparisons/${comparisonId}/runs/${runId}`);

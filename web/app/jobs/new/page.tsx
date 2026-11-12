@@ -8,11 +8,17 @@ import * as React from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FieldGroup, Input, Label, fieldClass } from "@/components/ui/input";
-import { OutputColumnsEditor, orderBySeq, suggestUniformLayout } from "@/components/output-columns-editor";
+import {
+  OutputColumnsEditor,
+  orderBySeq,
+  suggestUniformLayout,
+} from "@/components/output-columns-editor";
+import { AutoDetectPanel, type AutoDetectApply } from "@/components/auto-detect-panel";
 import { TemplatePicker } from "@/components/template-picker";
 import { exactPhraseRegex, extractGroupNames, parsePhraseInput } from "@/lib/aggregation";
 import {
   FilterTemplate,
+  FilterTemplateInput,
   createJob,
   createTemplate,
   getJob,
@@ -20,6 +26,7 @@ import {
   listIndexes,
   listLogFormats,
   listRegions,
+  listS3Profiles,
   listTemplates,
   updateTemplate,
 } from "@/lib/api";
@@ -40,6 +47,16 @@ function splitFieldNames(s: string): string[] {
     .filter(Boolean);
 }
 
+type TemplateSaveConflict = {
+  mode: "create" | "update";
+  name: string;
+  existingId: number | null;
+  existingName: string;
+};
+
+function isDuplicateNameError(error: unknown): boolean {
+  return error instanceof Error && /already exists/i.test(error.message);
+}
 
 // The one use case this shipped for: unique SPID (and tracker ID) counts per
 // API + BU. Prefilled by "Load example" as a starting point — fully editable.
@@ -77,7 +94,9 @@ function buildPipeline(
   phrases: string[],
   ids: string[],
   messageTypes: string[],
-  exactPhrases: string[] = []
+  exactPhrases: string[] = [],
+  excludePhrases: string[] = [],
+  excludeExactPhrases: string[] = []
 ) {
   const allPhrases = [...phrases, ...messageTypes];
   const clauses: unknown[] = allPhrases.map((p) => ({ $contains: ["Body", p] }));
@@ -87,7 +106,16 @@ function buildPipeline(
     clauses.push({ $regex: ["Body", exactPhraseRegex(phrase)] });
   }
   if (ids.length) clauses.push({ $regex: ["Body", ids.map(esc).join("|")] });
-  if (clauses.length === 0) return null;
+  // NOT combination: a row must contain none of these. (NOT A AND NOT B.)
+  for (const phrase of excludePhrases) {
+    clauses.push({ $notcontains: ["Body", phrase] });
+  }
+  for (const phrase of excludeExactPhrases) {
+    clauses.push({ $notregex: ["Body", exactPhraseRegex(phrase)] });
+  }
+  // A filter still needs something positive; exclusions alone would scan and
+  // then discard everything.
+  if (allPhrases.length === 0 && exactPhrases.length === 0 && ids.length === 0) return null;
   return [{ query: { $and: clauses }, type: "filter" }];
 }
 
@@ -102,7 +130,10 @@ export default function NewJobPage() {
 
   // Unfiltered: the source picker is the one control, so it lists every
   // profile and the region comes from whichever is chosen.
-  const { data: allIndexes } = useQuery({ queryKey: ["indexes", ""], queryFn: () => listIndexes() });
+  const { data: allIndexes } = useQuery({
+    queryKey: ["indexes", ""],
+    queryFn: () => listIndexes(),
+  });
   const selectedIndex = allIndexes?.find((i) => i.id === indexId);
   // The source profile owns the credential — derive it rather than trust the
   // stored one. A clone (or the last-used prefill) otherwise carries a
@@ -122,6 +153,9 @@ export default function NewJobPage() {
   // Quoted phrases ("API : 502"): adjacent tokens, matched as a regex. Without
   // this, "$contains 502" also matches the 502 inside a millisecond timestamp.
   const [exactPhrases, setExactPhrases] = React.useState<string[]>([]);
+  const [excludePhrases, setExcludePhrases] = React.useState<string[]>([]);
+  const [excludeExactPhrases, setExcludeExactPhrases] = React.useState<string[]>([]);
+  const [excludeInput, setExcludeInput] = React.useState("");
   const [phraseInput, setPhraseInput] = React.useState("");
   const [idsText, setIdsText] = React.useState("");
   const [messageTypesText, setMessageTypesText] = React.useState("");
@@ -140,20 +174,45 @@ export default function NewJobPage() {
     () => [...exactPhrases, ...pending.exact],
     [exactPhrases, pending.exact]
   );
+  // The NOT box uses the same parser: unquoted = exclude the word, quoted =
+  // exclude the adjacent phrase.
+  const pendingExclude = React.useMemo(() => parsePhraseInput(excludeInput), [excludeInput]);
+  const effectiveExclude = React.useMemo(
+    () => [...excludePhrases, ...pendingExclude.words],
+    [excludePhrases, pendingExclude.words]
+  );
+  const effectiveExcludeExact = React.useMemo(
+    () => [...excludeExactPhrases, ...pendingExclude.exact],
+    [excludeExactPhrases, pendingExclude.exact]
+  );
   function commitPhraseInput() {
     if (pendingWords.length === 0 && pending.exact.length === 0) return;
     if (pendingWords.length > 0) setPhrases((prev) => [...prev, ...pendingWords]);
     if (pending.exact.length > 0) setExactPhrases((prev) => [...prev, ...pending.exact]);
     setPhraseInput("");
   }
+  function commitExcludeInput() {
+    if (pendingExclude.words.length === 0 && pendingExclude.exact.length === 0) return;
+    if (pendingExclude.words.length > 0)
+      setExcludePhrases((prev) => [...prev, ...pendingExclude.words]);
+    if (pendingExclude.exact.length > 0)
+      setExcludeExactPhrases((prev) => [...prev, ...pendingExclude.exact]);
+    setExcludeInput("");
+  }
 
   // "Save the search": named phrase/ID/message-type sets, reusable across jobs
   // and schedules.
   const qc = useQueryClient();
   const { data: templates } = useQuery({ queryKey: ["templates"], queryFn: listTemplates });
+  const { data: s3Profiles } = useQuery({ queryKey: ["s3-profiles"], queryFn: listS3Profiles });
   const [templateId, setTemplateId] = React.useState<number | "">("");
+  const [s3ProfileId, setS3ProfileId] = React.useState<number | "">("");
   const [savingTemplate, setSavingTemplate] = React.useState(false);
   const [templateName, setTemplateName] = React.useState("");
+  const [saveConflict, setSaveConflict] = React.useState<TemplateSaveConflict | null>(null);
+  const searchNameRef = React.useRef<HTMLInputElement>(null);
+  const templateNameRef = React.useRef<HTMLInputElement>(null);
+  const conflictRef = React.useRef<HTMLDivElement>(null);
   // Mandatory search name / extraction label: every extraction requires a name
   // so extracted files are always identifiable on disk and downloads.
   const [searchLabel, setSearchLabel] = React.useState("");
@@ -165,14 +224,19 @@ export default function NewJobPage() {
     setSearchLabel(tpl.name);
     setPhrases(tpl.phrases);
     setExactPhrases(tpl.exact_phrases ?? []);
+    setExcludePhrases(tpl.exclude_phrases ?? []);
+    setExcludeExactPhrases(tpl.exclude_exact_phrases ?? []);
+    setExcludeInput("");
     setIdsText(tpl.ids.join("\n"));
     setMessageTypesText(tpl.message_types.join("\n"));
+    setS3ProfileId(tpl.s3_profile_id ?? "");
     // The regex is the laborious part of a search, so a saved one comes back
     // with it. A template without a parse config just switches the section off
     // rather than wiping whatever is typed there.
     const agg = tpl.aggregation;
     setAggEnabled(Boolean(agg?.enabled));
     if (agg?.enabled) {
+      setAggregateEnabled(agg.aggregate !== false);
       setAggRegex(agg.regex);
       setUseLibrary(Boolean(agg.use_library));
       setGroupByText(agg.group_by.join(", "));
@@ -206,42 +270,71 @@ export default function NewJobPage() {
     }
   }
 
+  function buildTemplatePayload(name: string): FilterTemplateInput {
+    return {
+      name,
+      phrases: effectivePhrases,
+      ids,
+      exact_phrases: effectiveExact,
+      exclude_phrases: effectiveExclude,
+      exclude_exact_phrases: effectiveExcludeExact,
+      message_types: messageTypes,
+      customer,
+      // Remember where this search was built, so batch runs and future
+      // loads come pre-filled with its source.
+      credential_id: effectiveCredentialId === "" ? null : Number(effectiveCredentialId),
+      region_code: region || null,
+      index_target_id: indexId === "" ? null : Number(indexId),
+      s3_profile_id: s3ProfileId === "" ? null : Number(s3ProfileId),
+      aggregation: aggEnabled
+        ? {
+            enabled: true,
+            aggregate: aggregateEnabled,
+            regex: useLibrary ? "" : aggRegex,
+            use_library: useLibrary,
+            group_by: aggregateEnabled ? groupBy : [],
+            unique_fields: aggregateEnabled ? uniqueFields : [],
+            skip_raw_output: aggregateEnabled ? skipRawOutput : false,
+            raw_columns: rawColumns,
+            include_log_format: includeLogFormat,
+            include_message: includeMessageColumn,
+            column_labels: columnLabels,
+            raw_column_defaults: columnDefaults,
+            timestamp_column: timestampHeader.trim() || "timestamp_utc",
+          }
+        : null,
+    };
+  }
+
+  function findTemplateByName(name: string): FilterTemplate | undefined {
+    const needle = name.trim().toLowerCase();
+    return templates?.find((t) => t.name.trim().toLowerCase() === needle);
+  }
+
   const saveTemplate = useMutation({
-    mutationFn: (name: string) =>
-      createTemplate({
-        name,
-        phrases: effectivePhrases,
-        ids,
-        exact_phrases: effectiveExact,
-        message_types: messageTypes,
-        customer,
-        // Remember where this search was built, so batch runs and future
-        // loads come pre-filled with its source.
-        credential_id: effectiveCredentialId === "" ? null : Number(effectiveCredentialId),
-        region_code: region || null,
-        index_target_id: indexId === "" ? null : Number(indexId),
-        aggregation: aggEnabled
-          ? {
-              enabled: true,
-              regex: useLibrary ? "" : aggRegex,
-              use_library: useLibrary,
-              group_by: groupBy,
-              unique_fields: uniqueFields,
-              skip_raw_output: skipRawOutput,
-              raw_columns: rawColumns,
-              include_log_format: includeLogFormat,
-              include_message: includeMessageColumn,
-              column_labels: columnLabels,
-              raw_column_defaults: columnDefaults,
-              timestamp_column: timestampHeader.trim() || "timestamp_utc",
-            }
-          : null,
-      }),
+    mutationFn: (name: string) => createTemplate(buildTemplatePayload(name)),
     onSuccess: (tpl) => {
       qc.invalidateQueries({ queryKey: ["templates"] });
       setTemplateId(tpl.id);
+      setSearchLabel(tpl.name);
       setSavingTemplate(false);
       setTemplateName("");
+      setSaveConflict(null);
+    },
+    onError: (error: Error, name: string) => {
+      // The list is normally fresh enough for the preflight check. If another
+      // tab created the name between render and save, turn the 409 into the
+      // same update/rename choice instead of a dead-end error.
+      if (isDuplicateNameError(error)) {
+        const existing = findTemplateByName(name);
+        setSaveConflict({
+          mode: "create",
+          name,
+          existingId: existing?.id ?? null,
+          existingName: existing?.name ?? name,
+        });
+        qc.invalidateQueries({ queryKey: ["templates"] });
+      }
     },
   });
 
@@ -249,36 +342,153 @@ export default function NewJobPage() {
   // validating the output here is not having to come back to Filter and
   // re-save under the same name after every tweak.
   const updateExistingTemplate = useMutation({
-    mutationFn: () =>
-      updateTemplate(Number(templateId), {
-        name: templates?.find((t) => t.id === templateId)?.name ?? "",
-        phrases: effectivePhrases,
-        ids,
-        exact_phrases: effectiveExact,
-        message_types: messageTypes,
-        customer,
-        credential_id: effectiveCredentialId === "" ? null : Number(effectiveCredentialId),
-        region_code: region || null,
-        index_target_id: indexId === "" ? null : Number(indexId),
-        aggregation: aggEnabled
-          ? {
-              enabled: true,
-              regex: useLibrary ? "" : aggRegex,
-              use_library: useLibrary,
-              group_by: groupBy,
-              unique_fields: uniqueFields,
-              skip_raw_output: skipRawOutput,
-              raw_columns: rawColumns,
-              include_log_format: includeLogFormat,
-              include_message: includeMessageColumn,
-              column_labels: columnLabels,
-              raw_column_defaults: columnDefaults,
-              timestamp_column: timestampHeader.trim() || "timestamp_utc",
-            }
-          : null,
-      }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["templates"] }),
+    mutationFn: (name: string) => updateTemplate(Number(templateId), buildTemplatePayload(name)),
+    onSuccess: (tpl) => {
+      qc.invalidateQueries({ queryKey: ["templates"] });
+      setSearchLabel(tpl.name);
+      setSaveConflict(null);
+    },
+    onError: (error: Error, name: string) => {
+      if (isDuplicateNameError(error)) {
+        const existing = findTemplateByName(name);
+        setSaveConflict({
+          mode: "update",
+          name,
+          existingId: existing?.id ?? null,
+          existingName: existing?.name ?? name,
+        });
+        qc.invalidateQueries({ queryKey: ["templates"] });
+      }
+    },
   });
+
+  // Called only after the person explicitly chooses "Update existing" in the
+  // conflict panel. It may target a different saved search than the one loaded.
+  const resolveTemplateConflict = useMutation({
+    mutationFn: (conflict: TemplateSaveConflict) => {
+      if (conflict.existingId == null) {
+        throw new Error("Refresh the saved searches and try again");
+      }
+      return updateTemplate(conflict.existingId, buildTemplatePayload(conflict.name));
+    },
+    onSuccess: (tpl) => {
+      qc.invalidateQueries({ queryKey: ["templates"] });
+      setTemplateId(tpl.id);
+      setSearchLabel(tpl.name);
+      setSavingTemplate(false);
+      setTemplateName("");
+      setSaveConflict(null);
+    },
+  });
+
+  function startSaveAsSearch() {
+    const name = templateName.trim();
+    if (!name) return;
+    saveTemplate.reset();
+    const existing = findTemplateByName(name);
+    if (existing) {
+      resolveTemplateConflict.reset();
+      setSaveConflict({
+        mode: "create",
+        name,
+        existingId: existing.id,
+        existingName: existing.name,
+      });
+      return;
+    }
+    setSaveConflict(null);
+    saveTemplate.mutate(name);
+  }
+
+  function startSaveExistingChanges() {
+    const name = searchLabel.trim();
+    if (!name) return;
+    updateExistingTemplate.reset();
+    const existing = findTemplateByName(name);
+    if (existing && existing.id !== Number(templateId)) {
+      resolveTemplateConflict.reset();
+      setSaveConflict({
+        mode: "update",
+        name,
+        existingId: existing.id,
+        existingName: existing.name,
+      });
+      return;
+    }
+    setSaveConflict(null);
+    updateExistingTemplate.mutate(name);
+  }
+
+  function handleRenameConflict() {
+    const conflict = saveConflict;
+    setSaveConflict(null);
+    if (!conflict) return;
+    if (conflict.mode === "create") {
+      setSavingTemplate(true);
+      setTemplateName(conflict.name);
+      requestAnimationFrame(() => {
+        templateNameRef.current?.focus();
+        templateNameRef.current?.select();
+      });
+    } else {
+      requestAnimationFrame(() => {
+        searchNameRef.current?.focus();
+        searchNameRef.current?.select();
+      });
+    }
+  }
+
+  /**
+   * Apply a detected pattern: fill the regex (or switch to the library) and the
+   * two field boxes from the fields that actually carried values in the pasted
+   * sample. Column overrides are cleared so the output checklist follows the
+   * newly detected fields instead of a previous search's selection.
+   */
+  function applyAutoDetect(apply: AutoDetectApply, label: string) {
+    setAggEnabled(true);
+    setAggregateEnabled(true);
+    setUseLibrary(apply.useLibrary);
+    if (!apply.useLibrary) setAggRegex(apply.regex ?? "");
+    setGroupByText(apply.groupBy.join(", "));
+    setUniqueFieldsText(apply.unique.join(", "));
+    // Show the pasted line in the sample-test box so the extracted fields are
+    // visible right away instead of only after someone pastes it again.
+    setSampleLine(apply.sample);
+    setIncludedFieldsOverride(null);
+    setColSeq({});
+    setColLabels({});
+    setColDefaults({});
+    setDetectedFrom(label);
+  }
+
+  // A conflict is resolved in the Filter card, but the Save changes button that
+  // raises an update conflict lives lower in the page. Bring the choice into view.
+  React.useEffect(() => {
+    if (!saveConflict) return;
+    requestAnimationFrame(() => {
+      conflictRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }, [saveConflict]);
+
+  // If a 409 arrived before the templates query refreshed, fill in the id once
+  // the refetched list contains the conflicting name, so Update existing works.
+  React.useEffect(() => {
+    if (!saveConflict || saveConflict.existingId != null) return;
+    const existing = findTemplateByName(saveConflict.name);
+    if (existing) {
+      setSaveConflict((current) =>
+        current
+          ? {
+              ...current,
+              existingId: existing.id,
+              existingName: existing.name,
+            }
+          : current
+      );
+    }
+    // findTemplateByName reads the latest templates list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [templates, saveConflict]);
 
   const [chunkHours, setChunkHours] = React.useState(1);
   const [batchSize, setBatchSize] = React.useState(100);
@@ -287,6 +497,9 @@ export default function NewJobPage() {
   // Parse & aggregate: extract named fields from each matched line and count
   // DISTINCT values of one or more of them, grouped by the others.
   const [aggEnabled, setAggEnabled] = React.useState(false);
+  // Parse and aggregate are separate: parse extracts fields into the CSV,
+  // aggregate adds group-by + distinct counts. Both on = the old behaviour.
+  const [aggregateEnabled, setAggregateEnabled] = React.useState(true);
   const [aggRegex, setAggRegex] = React.useState("");
   const [groupByText, setGroupByText] = React.useState("");
   const [uniqueFieldsText, setUniqueFieldsText] = React.useState("");
@@ -295,13 +508,16 @@ export default function NewJobPage() {
   // typed here — the only workable option once there are many log shapes.
   const [useLibrary, setUseLibrary] = React.useState(false);
   const [sampleLine, setSampleLine] = React.useState("");
+  // Name of the saved pattern the Auto-detect panel applied, shown next to the
+  // fields so it is clear where the prefilled values came from.
+  const [detectedFrom, setDetectedFrom] = React.useState<string | null>(null);
   // Which parsed fields land in the output file, independent of group_by/
   // unique_fields (those still drive the grouping either way). null = no
   // manual choice yet, so the checklist falls back to the implicit default
   // (group_by ∪ unique_fields) — exactly today's behavior, unchanged.
-  const [includedFieldsOverride, setIncludedFieldsOverride] = React.useState<Set<
-    string
-  > | null>(null);
+  const [includedFieldsOverride, setIncludedFieldsOverride] = React.useState<Set<string> | null>(
+    null
+  );
   // Per-field output sequence (1-based), uniform CSV header, and empty-value
   // default — the "number the columns" control for uniform extracts.
   const [colSeq, setColSeq] = React.useState<Record<string, number>>({});
@@ -340,8 +556,10 @@ export default function NewJobPage() {
     [aggRegex, useLibrary, libraryFields]
   );
   const defaultIncludedFields = React.useMemo(
-    () => new Set([...groupBy, ...uniqueFields]),
-    [groupBy, uniqueFields]
+    // Aggregating: the deliverable is the grouped/counted fields. Parse-only:
+    // every extracted field is a column unless the user unchecks one.
+    () => new Set(aggregateEnabled ? [...groupBy, ...uniqueFields] : regexFields),
+    [aggregateEnabled, groupBy, uniqueFields, regexFields]
   );
   const includedFields = includedFieldsOverride ?? defaultIncludedFields;
   // Sequence-number order, not click order, so the output column order is
@@ -415,6 +633,7 @@ export default function NewJobPage() {
 
   function loadAggExample() {
     setAggEnabled(true);
+    setAggregateEnabled(true);
     setUseLibrary(false);
     setAggRegex(EXAMPLE_REGEX);
     setGroupByText("api, BU");
@@ -452,9 +671,7 @@ export default function NewJobPage() {
   const aggValid =
     !aggEnabled ||
     ((useLibrary || aggRegex.trim() !== "") &&
-      uniqueFields.length > 0 &&
-      overlappingFields.length === 0);
-
+      (!aggregateEnabled || (uniqueFields.length > 0 && overlappingFields.length === 0)));
 
   const [recentRanges, setRecentRanges] = React.useState<SavedRange[]>([]);
   React.useEffect(() => {
@@ -489,8 +706,11 @@ export default function NewJobPage() {
     setCredentialId(cloneJob.credential_id);
     setRegion(cloneJob.region_code);
     setIndexId(cloneJob.index_target_id);
+    setS3ProfileId(cloneJob.s3_profile_id ?? "");
     setPhrases((cloneJob.filter_spec.phrases ?? []).flatMap(splitWords));
     setExactPhrases(cloneJob.filter_spec.exact_phrases ?? []);
+    setExcludePhrases(cloneJob.filter_spec.exclude_phrases ?? []);
+    setExcludeExactPhrases(cloneJob.filter_spec.exclude_exact_phrases ?? []);
     setIdsText((cloneJob.filter_spec.ids ?? []).join("\n"));
     setMessageTypesText((cloneJob.filter_spec.message_types ?? []).join("\n"));
     setChunkHours(cloneJob.chunk_hours);
@@ -499,8 +719,8 @@ export default function NewJobPage() {
       cloneJob.output_format === "jsonl"
         ? "jsonl"
         : cloneJob.output_format === "bigquery"
-        ? "bigquery"
-        : "csv"
+          ? "bigquery"
+          : "csv"
     );
     setPreset("custom");
     // Must use the zone the fields are read back in (`tz`), not a fixed one —
@@ -510,6 +730,7 @@ export default function NewJobPage() {
     const agg = cloneJob.filter_spec.aggregation;
     setAggEnabled(Boolean(agg?.enabled));
     if (agg?.enabled) {
+      setAggregateEnabled(agg.aggregate !== false);
       setAggRegex(agg.regex ?? "");
       setUseLibrary(Boolean(agg.use_library));
       setGroupByText((agg.group_by ?? []).join(", "));
@@ -561,7 +782,14 @@ export default function NewJobPage() {
   const validRange = end > start;
   const totalChunks = validRange ? Math.ceil((end - start) / (chunkHours * 3600)) : 0;
   const batches = Math.ceil(ids.length / batchSize) || 0;
-  const pipeline = buildPipeline(effectivePhrases, ids, messageTypes, effectiveExact);
+  const pipeline = buildPipeline(
+    effectivePhrases,
+    ids,
+    messageTypes,
+    effectiveExact,
+    effectiveExclude,
+    effectiveExcludeExact
+  );
 
   // Spelled out next to the button so it's obvious the regex travels with the
   // search — it lives in a section far below this one.
@@ -570,8 +798,13 @@ export default function NewJobPage() {
       `${effectivePhrases.length} word${effectivePhrases.length === 1 ? "" : "s"}`,
     effectiveExact.length > 0 &&
       `${effectiveExact.length} exact phrase${effectiveExact.length === 1 ? "" : "s"}`,
+    effectiveExclude.length + effectiveExcludeExact.length > 0 &&
+      `${effectiveExclude.length + effectiveExcludeExact.length} exclusion${
+        effectiveExclude.length + effectiveExcludeExact.length === 1 ? "" : "s"
+      }`,
     ids.length > 0 && `${ids.length} ID${ids.length === 1 ? "" : "s"}`,
-    messageTypes.length > 0 && `${messageTypes.length} message type${messageTypes.length === 1 ? "" : "s"}`,
+    messageTypes.length > 0 &&
+      `${messageTypes.length} message type${messageTypes.length === 1 ? "" : "s"}`,
     aggEnabled && aggRegex.trim() !== "" && "the parse pattern",
   ].filter(Boolean) as string[];
   const hasSomethingToSave = savedParts.length > 0;
@@ -597,20 +830,24 @@ export default function NewJobPage() {
         phrases: effectivePhrases,
         ids,
         exact_phrases: effectiveExact,
+        exclude_phrases: effectiveExclude,
+        exclude_exact_phrases: effectiveExcludeExact,
         message_types: messageTypes,
         output_format: format,
         is_preview: preview,
         // Mandatory extraction label: names output files <search_name>_<job_id>_<timeframe>.csv.zip
         label: searchLabel.trim(),
         customer,
+        s3_profile_id: s3ProfileId === "" ? null : Number(s3ProfileId),
         aggregation: aggEnabled
           ? {
               enabled: true,
+              aggregate: aggregateEnabled,
               regex: useLibrary ? "" : aggRegex,
               use_library: useLibrary,
-              group_by: groupBy,
-              unique_fields: uniqueFields,
-              skip_raw_output: skipRawOutput,
+              group_by: aggregateEnabled ? groupBy : [],
+              unique_fields: aggregateEnabled ? uniqueFields : [],
+              skip_raw_output: aggregateEnabled ? skipRawOutput : false,
               raw_columns: rawColumns,
               include_log_format: includeLogFormat,
               include_message: includeMessageColumn,
@@ -849,6 +1086,7 @@ export default function NewJobPage() {
               Extraction Label / Search Name <span className="text-danger">*</span>
             </Label>
             <Input
+              ref={searchNameRef}
               value={searchLabel}
               onChange={(e) => setSearchLabel(e.target.value)}
               placeholder="e.g. INVOICE_ABSCBN_NV"
@@ -879,6 +1117,7 @@ export default function NewJobPage() {
                 <div className="min-w-[180px] space-y-1.5">
                   <Label>Search name</Label>
                   <Input
+                    ref={templateNameRef}
                     autoFocus
                     value={templateName}
                     onChange={(e) => setTemplateName(e.target.value)}
@@ -888,7 +1127,7 @@ export default function NewJobPage() {
                 <Button
                   size="sm"
                   disabled={!templateName.trim() || saveTemplate.isPending}
-                  onClick={() => saveTemplate.mutate(templateName.trim())}
+                  onClick={startSaveAsSearch}
                 >
                   {saveTemplate.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                   Save
@@ -930,20 +1169,66 @@ export default function NewJobPage() {
                 required
               />
               {!customer.trim() && hasSomethingToSave && (
-                <p className="text-xs text-danger">
-                  Required to save this search.
-                </p>
+                <p className="text-xs text-danger">Required to save this search.</p>
               )}
             </div>
             {hasSomethingToSave && !savingTemplate && (
-              <p className="text-xs text-muted-foreground">
-                Saves {savedParts.join(" + ")}.
-              </p>
+              <p className="text-xs text-muted-foreground">Saves {savedParts.join(" + ")}.</p>
             )}
-            {saveTemplate.isError && (
+            {saveTemplate.isError && !saveConflict && !isDuplicateNameError(saveTemplate.error) && (
               <p className="text-xs text-danger">{(saveTemplate.error as Error).message}</p>
             )}
           </div>
+
+          {saveConflict && (
+            <div
+              ref={conflictRef}
+              className="sm:col-span-2 border border-warning/40 bg-warning/10 p-3"
+            >
+              <p className="text-sm font-medium">Saved search name already exists</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                <strong>{saveConflict.existingName}</strong> is already saved.
+                {saveConflict.mode === "update"
+                  ? " You renamed this search to a name that another saved search already uses."
+                  : ""}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Updating replaces that saved search&apos;s filter and parse pattern with the
+                settings currently on this screen.
+              </p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                {saveConflict.existingId != null && (
+                  <Button
+                    size="sm"
+                    onClick={() => resolveTemplateConflict.mutate(saveConflict)}
+                    disabled={resolveTemplateConflict.isPending}
+                  >
+                    {resolveTemplateConflict.isPending && (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    )}
+                    Update existing
+                  </Button>
+                )}
+                <Button size="sm" variant="outline" onClick={handleRenameConflict}>
+                  Rename
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setSaveConflict(null)}>
+                  Cancel
+                </Button>
+              </div>
+              {saveConflict.existingId == null && (
+                <p className="mt-2 text-[11px] text-muted-foreground">
+                  The saved searches list is stale. Refresh the page to update the existing search,
+                  or choose Rename.
+                </p>
+              )}
+              {resolveTemplateConflict.isError && (
+                <p className="mt-2 text-xs text-danger">
+                  {(resolveTemplateConflict.error as Error).message}
+                </p>
+              )}
+            </div>
+          )}
 
           <div className="space-y-2 sm:col-span-2">
             <Label>Required words (all must appear, in any order)</Label>
@@ -957,12 +1242,14 @@ export default function NewJobPage() {
                   commitPhraseInput();
                 }
               }}
-              placeholder={'e.g. ClassName CGetEntitlementsCommand  ·  "API : 502" for an exact phrase'}
+              placeholder={
+                'e.g. ClassName CGetEntitlementsCommand  ·  "API : 502" for an exact phrase'
+              }
             />
             <p className="text-xs text-muted-foreground">
-              Quote a phrase to require those tokens <strong>adjacent</strong> — {" "}
-              <span className="font-mono">&quot;API : 502&quot;</span>. Left unquoted, each word
-              may appear anywhere, so <span className="font-mono">502</span> would also match a
+              Quote a phrase to require those tokens <strong>adjacent</strong> —{" "}
+              <span className="font-mono">&quot;API : 502&quot;</span>. Left unquoted, each word may
+              appear anywhere, so <span className="font-mono">502</span> would also match a
               timestamp.
             </p>
             {(pendingWords.length > 0 || pending.exact.length > 0) && (
@@ -998,6 +1285,69 @@ export default function NewJobPage() {
                     type="button"
                     onClick={() => setExactPhrases(exactPhrases.filter((_, j) => j !== i))}
                     aria-label={`Remove exact phrase ${p}`}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-2 sm:col-span-2">
+            <Label>Must NOT contain (all must be absent, in any order)</Label>
+            <Input
+              value={excludeInput}
+              onChange={(e) => setExcludeInput(e.target.value)}
+              onBlur={commitExcludeInput}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  commitExcludeInput();
+                }
+              }}
+              placeholder={'e.g. healthcheck  ·  "API : 502" for an exact phrase'}
+            />
+            <p className="text-xs text-muted-foreground">
+              A log is excluded if any of these appears. Quote a phrase to exclude those tokens only
+              when <strong>adjacent</strong>.
+            </p>
+            {(pendingExclude.words.length > 0 || pendingExclude.exact.length > 0) && (
+              <p className="text-xs text-muted-foreground">
+                {[...pendingExclude.words, ...pendingExclude.exact.map((p) => `"${p}"`)].join(
+                  " + "
+                )}{" "}
+                will be excluded from this run.
+              </p>
+            )}
+            <div className="flex flex-wrap gap-1.5">
+              {excludePhrases.map((p, i) => (
+                <span
+                  key={`x${i}`}
+                  className="inline-flex items-center gap-1 border border-danger/40 bg-danger/10 px-2.5 py-0.5 text-xs text-danger"
+                >
+                  NOT {p}
+                  <button
+                    type="button"
+                    onClick={() => setExcludePhrases(excludePhrases.filter((_, j) => j !== i))}
+                    aria-label={`Remove excluded word ${p}`}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+              {excludeExactPhrases.map((p, i) => (
+                <span
+                  key={`xe${i}`}
+                  className="inline-flex items-center gap-1 border border-danger/40 bg-danger/10 px-2.5 py-0.5 font-mono text-xs text-danger"
+                  title="Exclude only when these tokens are adjacent"
+                >
+                  NOT &quot;{p}&quot;
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setExcludeExactPhrases(excludeExactPhrases.filter((_, j) => j !== i))
+                    }
+                    aria-label={`Remove excluded exact phrase ${p}`}
                   >
                     <X className="h-3 w-3" />
                   </button>
@@ -1062,7 +1412,7 @@ export default function NewJobPage() {
                 onChange={(e) => setAggEnabled(e.target.checked)}
                 className="h-4 w-4"
               />
-              Extract fields from each matched line and count unique values
+              Extract fields from each matched line
             </label>
             <Button type="button" size="sm" variant="outline" onClick={loadAggExample}>
               Load example
@@ -1070,13 +1420,38 @@ export default function NewJobPage() {
           </div>
           {!aggEnabled && (
             <p className="text-xs text-muted-foreground sm:col-span-2">
-              Left off: the raw export is exactly <span className="font-mono">timestamp_utc</span>{" "}
-              + <span className="font-mono">message</span> — no parsing, nothing else added.
+              Left off: the raw export is exactly <span className="font-mono">timestamp_utc</span> +{" "}
+              <span className="font-mono">message</span> — no parsing, nothing else added.
             </p>
           )}
 
           {aggEnabled && (
             <>
+              <AutoDetectPanel onApply={applyAutoDetect} />
+
+              {detectedFrom && (
+                <p className="text-[11px] text-muted-foreground sm:col-span-2">
+                  Pattern detected from <strong>{detectedFrom}</strong>. Edit the regex or the field
+                  boxes if the sample was not representative.
+                </p>
+              )}
+
+              <label className="flex items-start gap-2 text-sm sm:col-span-2">
+                <input
+                  type="checkbox"
+                  className="mt-1 h-4 w-4"
+                  checked={aggregateEnabled}
+                  onChange={(e) => setAggregateEnabled(e.target.checked)}
+                />
+                <span>
+                  Also aggregate: group and count distinct values
+                  <span className="block text-xs text-muted-foreground">
+                    On: counts unique values of the fields below. Off: parse only — every matched
+                    row&rsquo;s fields go to the CSV, but no counts are computed.
+                  </span>
+                </span>
+              </label>
+
               <div className="space-y-2 sm:col-span-2">
                 <label className="flex items-start gap-2 text-sm">
                   <input
@@ -1114,40 +1489,49 @@ export default function NewJobPage() {
               </div>
 
               {!useLibrary && (
-              <div className="space-y-1.5 sm:col-span-2">
-                <Label>
-                  Regex with named groups{" "}
-                  <span className="font-normal text-muted-foreground">
-                    e.g. (?&lt;spid&gt;\d+) — pasted from Last9&rsquo;s Builder works as-is
-                  </span>
-                </Label>
-                <textarea
-                  className={`${fieldClass} h-20 py-2 font-mono text-xs`}
-                  value={aggRegex}
-                  onChange={(e) => setAggRegex(e.target.value)}
-                  placeholder="^\s*(?<trackerid>AHA-\d-[a-f0-9-]+)\s+-\s+ClassName\s+(?<api>\w+)\s+SPAccountId\s+(?<spid>\d+)..."
-                />
-              </div>
+                <div className="space-y-1.5 sm:col-span-2">
+                  <Label>
+                    Regex with named groups{" "}
+                    <span className="font-normal text-muted-foreground">
+                      e.g. (?&lt;spid&gt;\d+) — pasted from Last9&rsquo;s Builder works as-is
+                    </span>
+                  </Label>
+                  <textarea
+                    className={`${fieldClass} h-20 py-2 font-mono text-xs`}
+                    value={aggRegex}
+                    onChange={(e) => setAggRegex(e.target.value)}
+                    placeholder="^\s*(?<trackerid>AHA-\d-[a-f0-9-]+)\s+-\s+ClassName\s+(?<api>\w+)\s+SPAccountId\s+(?<spid>\d+)..."
+                  />
+                </div>
               )}
-              <Field label="Group by (comma-separated field names)">
-                <Input
-                  value={groupByText}
-                  onChange={(e) => setGroupByText(e.target.value)}
-                  placeholder="api, BU"
-                />
-              </Field>
-              <Field label="Count unique values of (comma-separated)">
-                <Input
-                  value={uniqueFieldsText}
-                  onChange={(e) => setUniqueFieldsText(e.target.value)}
-                  placeholder="spid, trackerid"
-                />
-              </Field>
-              {overlappingFields.length > 0 && (
-                <p className="text-xs text-danger sm:col-span-2">
-                  <strong>{overlappingFields.join(", ")}</strong> is in both boxes. Grouping by the
-                  field you&apos;re counting puts every value in its own group, so every count comes
-                  out as 1. Remove it from &ldquo;Group by&rdquo;.
+              {aggregateEnabled ? (
+                <>
+                  <Field label="Group by (comma-separated field names)">
+                    <Input
+                      value={groupByText}
+                      onChange={(e) => setGroupByText(e.target.value)}
+                      placeholder="api, BU"
+                    />
+                  </Field>
+                  <Field label="Count unique values of (comma-separated)">
+                    <Input
+                      value={uniqueFieldsText}
+                      onChange={(e) => setUniqueFieldsText(e.target.value)}
+                      placeholder="spid, trackerid"
+                    />
+                  </Field>
+                  {overlappingFields.length > 0 && (
+                    <p className="text-xs text-danger sm:col-span-2">
+                      <strong>{overlappingFields.join(", ")}</strong> is in both boxes. Grouping by
+                      the field you&apos;re counting puts every value in its own group, so every
+                      count comes out as 1. Remove it from &ldquo;Group by&rdquo;.
+                    </p>
+                  )}
+                </>
+              ) : (
+                <p className="text-xs text-muted-foreground sm:col-span-2">
+                  Parse only — no group-by or counts. The fields you keep in the output editor below
+                  are written for every matched row.
                 </p>
               )}
               <div className="flex items-center gap-2 sm:col-span-2">
@@ -1155,6 +1539,7 @@ export default function NewJobPage() {
                   type="checkbox"
                   id="skip-raw-output"
                   checked={skipRawOutput}
+                  disabled={!aggregateEnabled}
                   onChange={(e) => setSkipRawOutput(e.target.checked)}
                   className="h-4 w-4"
                 />
@@ -1190,7 +1575,9 @@ export default function NewJobPage() {
                 <p className="text-xs text-muted-foreground sm:col-span-2">
                   <Bookmark className="mr-1 inline h-3 w-3" />
                   This pattern is kept by <strong>Save as search</strong> (in Filter, above), and
-                  comes back whenever you load that search — including on a schedule.
+                  comes back whenever you load that search — including on a schedule. It is also
+                  added to <strong>Log formats</strong> automatically so other searches can reuse
+                  it.
                 </p>
               )}
 
@@ -1204,7 +1591,9 @@ export default function NewJobPage() {
                 />
                 {sampleTest.error && <p className="text-xs text-danger">{sampleTest.error}</p>}
                 {sampleLine.trim() && !sampleTest.error && !sampleTest.groups && (
-                  <p className="text-xs text-danger">No match — check the regex against this line.</p>
+                  <p className="text-xs text-danger">
+                    No match — check the regex against this line.
+                  </p>
                 )}
               </div>
 
@@ -1302,7 +1691,7 @@ export default function NewJobPage() {
                     )}
                   </div>
 
-                  {uniqueFields.length === 0 && (
+                  {aggregateEnabled && uniqueFields.length === 0 && (
                     <p className="text-xs text-danger">
                       Pick at least one field to count unique values of, above.
                     </p>
@@ -1315,18 +1704,22 @@ export default function NewJobPage() {
                       <Button
                         type="button"
                         size="sm"
-                        disabled={!aggValid || !customer.trim() || updateExistingTemplate.isPending}
-                        onClick={() => updateExistingTemplate.mutate()}
-                        title={
-                          customer.trim() ? undefined : "Enter a customer name first"
+                        disabled={
+                          !aggValid ||
+                          !customer.trim() ||
+                          !searchLabel.trim() ||
+                          updateExistingTemplate.isPending
                         }
+                        onClick={startSaveExistingChanges}
+                        title={customer.trim() ? undefined : "Enter a customer name first"}
                       >
                         {updateExistingTemplate.isPending ? (
                           <Loader2 className="h-3.5 w-3.5 animate-spin" />
                         ) : (
                           <Check className="h-3.5 w-3.5" />
                         )}
-                        Save changes to &ldquo;{templates?.find((t) => t.id === templateId)?.name}
+                        Save changes to &ldquo;
+                        {searchLabel.trim() || templates?.find((t) => t.id === templateId)?.name}
                         &rdquo;
                       </Button>
                     ) : (
@@ -1338,11 +1731,13 @@ export default function NewJobPage() {
                     {updateExistingTemplate.isSuccess && !updateExistingTemplate.isPending && (
                       <span className="text-xs text-success">Saved.</span>
                     )}
-                    {updateExistingTemplate.isError && (
-                      <p className="text-xs text-danger">
-                        {(updateExistingTemplate.error as Error).message}
-                      </p>
-                    )}
+                    {updateExistingTemplate.isError &&
+                      !saveConflict &&
+                      !isDuplicateNameError(updateExistingTemplate.error) && (
+                        <p className="text-xs text-danger">
+                          {(updateExistingTemplate.error as Error).message}
+                        </p>
+                      )}
                   </div>
                 </div>
               )}
@@ -1379,21 +1774,46 @@ export default function NewJobPage() {
               <option value="bigquery">BigQuery CSV (6-column)</option>
             </select>
           </Field>
+          <Field label="S3 destination (optional)">
+            <select
+              className={fieldClass}
+              value={s3ProfileId}
+              onChange={(e) => setS3ProfileId(e.target.value ? Number(e.target.value) : "")}
+            >
+              <option value="">No S3 upload — local download only</option>
+              {s3Profiles?.map((profile) => (
+                <option key={profile.id} value={profile.id}>
+                  {profile.name} · {profile.bucket}
+                  {profile.prefix ? `/${profile.prefix}` : ""}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-muted-foreground">
+              Uploads raw, summary, and counts artifacts when the run completes. Saved searches keep
+              this choice for scheduled runs.
+            </p>
+            {s3Profiles && s3Profiles.length === 0 && (
+              <p className="text-xs text-muted-foreground">
+                No S3 profiles yet.{" "}
+                <Link href="/s3-profiles" className="text-primary hover:underline">
+                  Add one
+                </Link>
+                .
+              </p>
+            )}
+          </Field>
         </Section>
-
       </div>
 
       {/* 6. Review & run — pinned to the viewport bottom so it is always at
           hand on a form that now spans columns. */}
       <div className="sticky bottom-0 z-10 -mx-4 mt-3 flex items-center justify-end gap-3 border-t border-border bg-background/95 px-4 py-2 backdrop-blur">
-        {create.isError && (
-          <p className="text-xs text-danger">{(create.error as Error).message}</p>
-        )}
+        {create.isError && <p className="text-xs text-danger">{(create.error as Error).message}</p>}
         <Button
           variant="outline"
           disabled={!canRun || create.isPending}
           onClick={() => create.mutate(true)}
-          title="Run only the first chunk, capped — to validate the filter"
+          title="Sample the newest part of the window, capped at 100 rows - to validate the filter"
         >
           Test filter
         </Button>
@@ -1435,4 +1855,3 @@ function Field({
     </FieldGroup>
   );
 }
-

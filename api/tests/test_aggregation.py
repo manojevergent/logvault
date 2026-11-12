@@ -50,6 +50,26 @@ def test_python_style_named_groups_also_accepted(client, monkeypatch):
     assert resp.status_code == 201
 
 
+def test_parse_only_without_unique_fields_accepted(client, monkeypatch):
+    import app.routers.jobs as jobs_router
+
+    monkeypatch.setattr(jobs_router, "dispatch_job", lambda _id: None)
+    resp = client.post("/jobs", json=_job(aggregate=False, group_by=[], unique_fields=[]))
+    assert resp.status_code == 201, resp.text
+    stored = resp.json()["filter_spec"]["aggregation"]
+    assert stored["aggregate"] is False
+    assert stored["unique_fields"] == []
+
+
+def test_aggregate_still_requires_a_unique_field(client, monkeypatch):
+    import app.routers.jobs as jobs_router
+
+    monkeypatch.setattr(jobs_router, "dispatch_job", lambda _id: None)
+    resp = client.post("/jobs", json=_job(aggregate=True, unique_fields=[]))
+    assert resp.status_code == 422
+    assert "at least one field" in resp.json()["detail"]
+
+
 def test_invalid_regex_rejected(client, monkeypatch):
     import app.routers.jobs as jobs_router
 

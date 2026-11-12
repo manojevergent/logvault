@@ -54,11 +54,19 @@ jobs = Table(
     Column("output_file_path", Text),
     Column("summary_file_path", Text),
     Column("counts_file_path", Text),
+    Column("unmatched_file_path", Text),
     Column("rollup_of", JSON),
     Column("output_format", String(10)),
     Column("is_preview", Boolean),
     Column("preview", JSON),
     Column("aggregation_result", JSON),
+    Column("s3_profile_id", Integer),
+    Column("s3_destination", JSON),
+    Column("s3_uri", Text),
+    Column("s3_summary_uri", Text),
+    Column("s3_counts_uri", Text),
+    Column("s3_error", Text),
+    Column("s3_uploaded_at", DateTime(timezone=True)),
     Column("error_message", Text),
     Column("created_by", String(255)),
     Column("started_at", DateTime(timezone=True)),
@@ -81,6 +89,7 @@ schedules = Table(
     Column("id_batch_size", Integer),
     Column("output_format", String(10)),
     Column("filter_spec", JSON),
+    Column("s3_profile_id", Integer),
     Column("bq_config", JSON),
     Column("last_run_at", DateTime(timezone=True)),
 )
@@ -135,6 +144,32 @@ index_targets = Table(
     Column("id", Integer, primary_key=True),
     Column("region_code", String(40)),
     Column("full_index_string", String(160)),
+)
+
+s3_profiles = Table(
+    "s3_profiles",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("name", String(120)),
+    Column("bucket", String(255)),
+    Column("region", String(40)),
+    Column("prefix", String(255)),
+    Column("endpoint_url", Text),
+    Column("encrypted_access_key_id", Text),
+    Column("encrypted_secret_access_key", Text),
+    Column("encrypted_session_token", Text),
+    Column("key_last4", String(8)),
+    Column("force_path_style", Boolean),
+)
+
+# Snapshot of every Last9-vs-New Relic comparison run. Written by the API; the
+# worker only prunes old rows so the table does not grow without bound.
+comparison_runs = Table(
+    "comparison_runs",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("comparison_id", Integer),
+    Column("created_at", DateTime(timezone=True)),
 )
 
 

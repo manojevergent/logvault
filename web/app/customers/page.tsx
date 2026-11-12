@@ -146,7 +146,7 @@ export default function CustomersPage() {
 
   return (
     <div className="mx-auto max-w-4xl animate-fade-in px-6 py-4">
-      <div className="flex items-end justify-between pb-3">
+      <div className="flex flex-wrap items-end justify-between gap-3 pb-3">
         <div className="space-y-0.5">
           <h1 className="text-base font-semibold tracking-tight">Customers</h1>
           <p className="text-xs text-muted-foreground">Jobs grouped by customer, month, and day.</p>

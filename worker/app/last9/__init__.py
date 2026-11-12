@@ -13,7 +13,7 @@ from .aggregate import AggregationError, AggregationSpec, Aggregator, normalize_
 from .batching import batch_ids, dedupe_preserve_order
 from .bq_formatter import BQRow, parse_bq_row
 from .checkpoint import Checkpoint
-from .chunking import count_chunks, make_chunks
+from .chunking import count_chunks, make_chunks, preview_window_start
 from .client import Last9Client, LogRow
 from .constants import (
     BODY_FIELD,
@@ -103,6 +103,7 @@ __all__ = [
     "parse_bq_row",
     "plan_extraction",
     "previous_calendar_day_window",
+    "preview_window_start",
     "store_path",
     "to_epoch",
     "validate_formats",

@@ -65,6 +65,19 @@ def test_jsonl_keeps_its_extension():
     assert download_filename(_job(fmt="jsonl")).endswith(".jsonl.zip")
 
 
+def test_txt_download_is_always_a_plain_txt_name():
+    assert download_filename(_job(), text=True) == "AHA_CGetEntitlements_16_2026-08-30.txt"
+    assert (
+        download_filename(_job(), "summary", text=True)
+        == "AHA_CGetEntitlements_16_2026-08-30_summary.txt"
+    )
+    assert (
+        download_filename(_job(), "counts", text=True)
+        == "AHA_CGetEntitlements_16_2026-08-30_counts.txt"
+    )
+    assert ".zip" not in download_filename(_job(), text=True)
+
+
 def test_a_job_with_no_saved_search_falls_back_to_its_id():
     assert download_filename(_job(label=None)) == "logvault_job_16_2026-08-30.csv.zip"
 

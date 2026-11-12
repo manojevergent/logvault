@@ -147,3 +147,54 @@ def run_job(job_id: int) -> None:
     except Exception as exc:
         _mark_failed(db, job_id, exc)
         raise  # let Celery record the task failure too
+
+
+@celery.task(name="logvault.upload_job_s3")
+def upload_job_s3(job_id: int) -> None:
+    """Retry S3 delivery for a completed job without re-querying Last9."""
+    from app import db
+    from app.s3 import upload_job_artifacts
+
+    eng = db.engine()
+    with eng.begin() as conn:
+        job = db.load(conn, db.jobs, job_id)
+        if job is None:
+            return
+        if not job.get("s3_profile_id"):
+            db.update_job(conn, job_id, s3_error="no S3 destination on this job")
+            db.add_event(conn, job_id, "S3 upload failed: no destination", level="warn")
+            return
+        profile = db.load(conn, db.s3_profiles, job["s3_profile_id"])
+        if profile is None:
+            message = "S3 profile no longer exists"
+            db.update_job(conn, job_id, s3_error=message)
+            db.add_event(conn, job_id, f"S3 upload failed: {message}", level="warn")
+            _send_alert_if_scheduled(conn, job, f"S3 upload failed: {message}")
+            return
+        db.add_event(conn, job_id, "S3 upload retry started")
+        job = dict(job)
+        profile = dict(profile)
+
+    try:
+        uris, errors = upload_job_artifacts(job, profile)
+        error = "; ".join(errors) if errors else None
+        if not uris and not error:
+            error = "no final artifacts found to upload"
+    except Exception as exc:  # noqa: BLE001
+        uris, error = {}, str(exc)
+
+    with eng.begin() as conn:
+        db.update_job(
+            conn,
+            job_id,
+            s3_uri=uris.get("raw"),
+            s3_summary_uri=uris.get("summary"),
+            s3_counts_uri=uris.get("counts"),
+            s3_error=error,
+            s3_uploaded_at=datetime.now(UTC) if uris else None,
+        )
+        if uris:
+            db.add_event(conn, job_id, "S3 upload complete: " + ", ".join(uris.values()))
+        if error:
+            db.add_event(conn, job_id, f"S3 upload failed: {error}", level="warn")
+            _send_alert_if_scheduled(conn, job, f"S3 upload failed: {error}")

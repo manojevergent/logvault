@@ -258,13 +258,25 @@ def _extract_message(raw_line: str) -> str:
     try:
         obj = json.loads(raw_line)
     except (json.JSONDecodeError, ValueError):
-        return _extract_message_from_broken_json(raw_line)
+        obj = None
     if isinstance(obj, dict):
-        for key in _MESSAGE_KEYS:
-            val = obj.get(key)
-            if val is not None:
-                return val if isinstance(val, str) else json.dumps(val)
-    return raw_line
+        message = _message_field(obj)
+        return message if message is not None else raw_line
+
+    # A multi-line record may wrap the JSON envelope in a timestamp/thread prefix
+    # and trace lines. Unwrap it before falling back, or every anchored parse
+    # pattern sees the wrapper instead of the log line.
+    embedded = _embedded_json_message(raw_line)
+    if embedded is not None:
+        inner, end = embedded
+        entry = _ENTRY_TIME.match(inner)
+        if entry is not None:
+            request = _REQUEST_LINE.search(raw_line[end:])
+            if request is not None:
+                return f"{entry.group('action')} -- {request.group(0).strip()}"
+        return inner
+
+    return _extract_message_from_broken_json(raw_line)
 
 
 # Applications do emit envelopes that aren't valid JSON — most often because a
@@ -276,6 +288,51 @@ _BROKEN_JSON_MESSAGE = re.compile(
     r'"(?:' + "|".join(_MESSAGE_KEYS) + r')"\s*:\s*"(?P<msg>.*)"\s*\}\s*$',
     re.DOTALL,
 )
+# The same extraction for an envelope embedded in a multi-line record (a
+# timestamp/thread prefix and trace lines around the JSON). Greedy to the final
+# quote before the closing brace, as above.
+_EMBEDDED_MESSAGE = re.compile(
+    r'"(?:' + "|".join(_MESSAGE_KEYS) + r')"\s*:\s*"(?P<msg>.*)"\s*\}',
+    re.DOTALL,
+)
+# A trace marker whose request payload is on a following line:
+#   {"message":"[getAcct...PostAction entry time] 1793..."}
+#   data request cp : <GetAccount...Request>...
+_ENTRY_TIME = re.compile(r"^\s*\[(?P<action>[A-Za-z_][\w.]*)\s+entry time\]", re.IGNORECASE)
+_REQUEST_LINE = re.compile(r"(?im)^\s*data\s+(?:comes\s+from\s+)?request(?:\s+cp)?\s*:.*$")
+
+
+def _message_field(obj: dict) -> str | None:
+    for key in _MESSAGE_KEYS:
+        value = obj.get(key)
+        if value is not None:
+            return value if isinstance(value, str) else json.dumps(value)
+    return None
+
+
+def _embedded_json_message(raw_line: str) -> tuple[str, int] | None:
+    """(message, end offset) for a JSON envelope wrapped in other lines."""
+    start = raw_line.find("{")
+    if start < 0:
+        return None
+    # Only unwrap a prefix that looks like a record header (e.g. a timestamp),
+    # not a normal log line that merely contains a JSON snippet.
+    prefix = raw_line[:start].strip()
+    if prefix and not prefix[:1].isdigit():
+        return None
+    text = raw_line[start:]
+    try:
+        obj, end_offset = json.JSONDecoder().raw_decode(text)
+    except (json.JSONDecodeError, ValueError):
+        match = _EMBEDDED_MESSAGE.search(text)
+        if match is None:
+            return None
+        return match.group("msg"), start + match.end()
+    if isinstance(obj, dict):
+        message = _message_field(obj)
+        if message is not None:
+            return message, start + end_offset
+    return None
 
 
 def _extract_message_from_broken_json(raw_line: str) -> str:

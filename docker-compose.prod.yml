@@ -18,6 +18,8 @@ services:
   worker:
     volumes: !override
       - exports:/data/exports
+    # No --concurrency here either: WORKER_CONCURRENCY (default 4) governs it,
+    # both at startup and as the target for the live resize in Admin.
     restart: unless-stopped
 
   web:

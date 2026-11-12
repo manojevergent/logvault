@@ -13,6 +13,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     DateTime,
+    Float,
     Integer,
     String,
     Text,
@@ -63,6 +64,10 @@ class Job(Base):
     summary_file_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Per-value occurrence counts, most frequent first (the pivot-table view).
     counts_file_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Every row the parse pattern did not match (timestamp,message), so a bad
+    # regex can be fixed from the exact lines; aggregation_result carries only a
+    # small display sample.
+    unmatched_file_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Set => this job merges other jobs' distinct-value stores instead of
     # querying Last9: {"schedule_id": N, "job_ids": [...], "label": "2026-08"}.
     rollup_of: Mapped[dict | None] = mapped_column(JSON, nullable=True)
@@ -70,6 +75,15 @@ class Job(Base):
     is_preview: Mapped[bool] = mapped_column(Boolean, default=False)
     preview: Mapped[list | None] = mapped_column(JSON, nullable=True)  # first ~20 rows
     aggregation_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Optional S3 delivery, snapshotted at creation so a later edit/deletion of
+    # the profile cannot change where this historical job says it went.
+    s3_profile_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    s3_destination: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    s3_uri: Mapped[str | None] = mapped_column(Text, nullable=True)
+    s3_summary_uri: Mapped[str | None] = mapped_column(Text, nullable=True)
+    s3_counts_uri: Mapped[str | None] = mapped_column(Text, nullable=True)
+    s3_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    s3_uploaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -123,6 +137,9 @@ class Schedule(Base):
     id_batch_size: Mapped[int] = mapped_column(Integer, default=100)
     output_format: Mapped[str] = mapped_column(String(10), default="csv")
     filter_spec: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Optional delivery destination. Each run snapshots this profile onto its
+    # job, so changing the schedule later does not rewrite past runs.
+    s3_profile_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     alert_recipients: Mapped[list] = mapped_column(
         JSON, default=list
     )  # email addresses to notify on failure
@@ -210,10 +227,16 @@ class FilterTemplate(Base):
     # Quoted phrases the user wants adjacent ("API : 502"). They are matched as
     # regexes because $contains is word-based and would also match a stray token.
     exact_phrases: Mapped[list] = mapped_column(JSON, default=list)
+    # Logs containing any of these are excluded ($notcontains / $notregex).
+    exclude_phrases: Mapped[list] = mapped_column(JSON, default=list)
+    exclude_exact_phrases: Mapped[list] = mapped_column(JSON, default=list)
     message_types: Mapped[list] = mapped_column(JSON, default=list)
     credential_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     region_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
     index_target_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Optional default delivery bucket. A job still snapshots the profile, so
+    # changing this later only affects future runs / batch jobs.
+    s3_profile_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Groups this search's extracts into one folder. Free text, sanitised to a
     # single path segment before it ever reaches the filesystem.
     customer: Mapped[str | None] = mapped_column(String(120), nullable=True)
@@ -237,3 +260,116 @@ class AppSetting(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
     updated_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+# New Relic account + user API key. The key is encrypted at rest with the same
+# Fernet key as Last9 tokens and is never returned to the browser. `region`
+# selects the NerdGraph endpoint (US vs EU); it is not the same as a Last9
+# region code and lives on the connection, not on the comparison.
+class NewRelicCredential(Base):
+    __tablename__ = "newrelic_credentials"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    label: Mapped[str] = mapped_column(String(120))
+    account_id: Mapped[int] = mapped_column(BigInteger)
+    region: Mapped[str] = mapped_column(String(10), default="us")  # us | eu
+    encrypted_api_key: Mapped[str] = mapped_column(Text)
+    api_key_last4: Mapped[str] = mapped_column(String(8))
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+# A reusable S3 destination. One profile = one bucket + region + optional
+# prefix/endpoint, so a search can pick "customer A archive" vs "customer B
+# archive" without retyping keys. Access keys are optional: empty means use the
+# worker's IAM role / default boto3 credential chain.
+class S3Profile(Base):
+    __tablename__ = "s3_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True)
+    bucket: Mapped[str] = mapped_column(String(255))
+    region: Mapped[str] = mapped_column(String(40))
+    prefix: Mapped[str] = mapped_column(String(255), default="")
+    # S3-compatible endpoints (MinIO, Ceph, LocalStack). Empty = AWS.
+    endpoint_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    encrypted_access_key_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    encrypted_secret_access_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    encrypted_session_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    key_last4: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    # MinIO generally needs path-style addressing.
+    force_path_style: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+# A saved "New Relic vs Last9" comparison. The Last9 side is a JSON pipeline
+# (the same LogJSON format jobs use); `last9_filter_spec` is kept only so the
+# editor can repopulate the phrase/ID builder. The New Relic side is the user's
+# NRQL, exactly as typed — the run engine rewrites only its time window and
+# TIMESERIES bucket, and returns `nrql_effective` so the UI can show what ran.
+class Comparison(Base):
+    __tablename__ = "comparisons"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last9_credential_id: Mapped[int] = mapped_column(Integer)
+    last9_index_target_id: Mapped[int] = mapped_column(Integer)
+    last9_region_code: Mapped[str] = mapped_column(String(40))
+    last9_pipeline: Mapped[list] = mapped_column(JSON, default=list)
+    # {phrases, ids, exact_phrases, message_types}; null for a hand-written
+    # pipeline the editor should open straight in JSON mode.
+    last9_filter_spec: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    nr_credential_id: Mapped[int] = mapped_column(Integer)
+    nrql: Mapped[str] = mapped_column(Text)
+    # How a numeric NRQL result becomes one comparable number: sum -> counts,
+    # avg/max/min -> gauges, last -> latest bucket. See newrelic.py.
+    nr_value_mode: Mapped[str] = mapped_column(String(10), default="sum")
+    nr_value_field: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # Default bucket in seconds. Null = derive from the NRQL's TIMESERIES or auto.
+    bucket_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+# One executed comparison. Results are snapshotted so editing a saved query
+# never rewrites the history of what was actually compared.
+class ComparisonRun(Base):
+    __tablename__ = "comparison_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    comparison_id: Mapped[int] = mapped_column(Integer)
+    start_epoch: Mapped[int] = mapped_column(BigInteger)
+    end_epoch: Mapped[int] = mapped_column(BigInteger)
+    bucket_seconds: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(20))  # ok | partial | failed
+
+    last9_ok: Mapped[bool] = mapped_column(Boolean, default=False)
+    last9_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last9_total: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last9_series: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    last9_raw: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    last9_elapsed_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    newrelic_ok: Mapped[bool] = mapped_column(Boolean, default=False)
+    newrelic_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    newrelic_total: Mapped[float | None] = mapped_column(Float, nullable=True)
+    newrelic_series: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    newrelic_raw: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    newrelic_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    newrelic_elapsed_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    nrql_effective: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last9_pipeline_effective: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

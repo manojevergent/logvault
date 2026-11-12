@@ -78,7 +78,12 @@ services:
         condition: service_healthy
     # -B embeds the beat scheduler (F1 schedules, F4 retention). For multi-worker
     # prod, drop -B here and run one dedicated `celery beat` process instead.
-    command: ["celery", "-A", "app.celery_app.celery", "worker", "-B", "--loglevel=INFO", "--concurrency=4"]
+    #
+    # Slots are NOT passed as --concurrency here: the worker reads
+    # WORKER_CONCURRENCY (default 4) from the environment so it can also be
+    # changed live from Admin → Worker capacity without slipping back to a
+    # hard-coded number on the next restart.
+    command: ["celery", "-A", "app.celery_app.celery", "worker", "-B", "--loglevel=INFO"]
 
   # Nightly pg_dump. Everything the platform knows lives in one volume:
   # credentials (encrypted refresh tokens included), index targets, schedules,

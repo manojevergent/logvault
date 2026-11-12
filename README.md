@@ -25,6 +25,34 @@ State is persisted to Postgres (so a page refresh recovers a running job), Redis
 is the Celery broker + cache, and generated CSVs are written to a mounted volume
 with signed/expiring download links.
 
+### New Relic vs Last9 comparison
+
+The **Compare** page runs a saved Last9 log query and a saved New Relic NRQL
+query over the same time window and shows totals, a per-bucket trend, and raw
+results side by side. Add a New Relic account/API key under **New Relic**, save
+the pair once, then re-run it whenever you need to check ingestion parity. See
+[`docs/NEW_RELIC_COMPARISON.md`](docs/NEW_RELIC_COMPARISON.md) for the query
+contract and limits (window cap, bucket sizing, NRQL rewriting).
+
+### Download formats
+
+Every comma-separated artifact — the raw extract, the per-group summary, and
+the per-value counts — can be downloaded either as its normal CSV (zipped when
+`ZIP_EXPORTS` is on) or as a plain `.txt` file. The `.txt` download contains the
+same comma-separated bytes; zipped artifacts are decompressed and streamed, not
+misnamed as text. JSONL extracts remain JSONL, since they are not
+comma-separated. The format is a download-time choice, so existing jobs do not
+need to be re-run.
+
+### S3 destinations
+
+Completed extractions can also be uploaded to S3. Create reusable bucket
+profiles under **Manage → S3 destinations**, then select one on a saved search
+or schedule so every run lands in that bucket automatically. Jobs snapshot the
+destination at creation, a failed upload never fails the extraction, and the
+job page offers a retry. See [`docs/S3_DESTINATIONS.md`](docs/S3_DESTINATIONS.md)
+for setup, object layout, and retry behaviour.
+
 ```
 last9_web_app/
 ├── web/      # Next.js frontend

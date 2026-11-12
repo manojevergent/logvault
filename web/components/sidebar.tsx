@@ -1,8 +1,11 @@
 "use client";
 
 import {
+  Activity,
+  ArrowLeftRight,
   Bookmark,
   CalendarClock,
+  CloudUpload,
   KeyRound,
   LayoutDashboard,
   ListChecks,
@@ -34,10 +37,13 @@ const primaryNav: NavItem[] = [
   { href: "/customers", label: "Customers", icon: Users },
   { href: "/jobs/new", label: "New extraction", icon: PlusCircle },
   { href: "/schedules", label: "Schedules", icon: CalendarClock },
+  { href: "/compare", label: "Compare", icon: ArrowLeftRight },
 ];
 
 const manageNav: NavItem[] = [
   { href: "/credentials", label: "Credentials", icon: KeyRound },
+  { href: "/new-relic", label: "New Relic", icon: Activity },
+  { href: "/s3-profiles", label: "S3 destinations", icon: CloudUpload },
   { href: "/indexes", label: "Indexes", icon: Database },
   { href: "/templates", label: "Saved searches", icon: Bookmark },
   { href: "/log-formats", label: "Log formats", icon: FileCode2 },
@@ -164,9 +170,7 @@ function SidebarBody({
           <div className="icon-3d flex h-8 w-8 items-center justify-center bg-gradient-to-br from-[#4285F4] to-[#1a56db]">
             <Vault className="h-[18px] w-[18px] text-white" strokeWidth={2.4} />
           </div>
-          {!collapsed && (
-            <span className="text-[15px] font-semibold tracking-tight">LogVault</span>
-          )}
+          {!collapsed && <span className="text-[15px] font-semibold tracking-tight">LogVault</span>}
         </div>
         {onClose && (
           <button
@@ -181,10 +185,7 @@ function SidebarBody({
       </div>
 
       <nav
-        className={cn(
-          "flex-1 overflow-y-auto pb-3 scrollbar-thin",
-          collapsed ? "px-1.5" : "px-2"
-        )}
+        className={cn("flex-1 overflow-y-auto pb-3 scrollbar-thin", collapsed ? "px-1.5" : "px-2")}
       >
         <NavSection
           title="Extract"
@@ -297,7 +298,12 @@ export function MobileSidebar({ open, onClose }: { open: boolean; onClose: () =>
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 md:hidden" role="dialog" aria-modal="true" aria-label="Navigation">
+    <div
+      className="fixed inset-0 z-50 md:hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Navigation"
+    >
       <button
         type="button"
         aria-hidden

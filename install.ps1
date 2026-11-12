@@ -124,8 +124,22 @@ function New-UrlSafeKey($bytes) {
     return [Convert]::ToBase64String($buf).Replace("+", "-").Replace("/", "_").TrimEnd("=")
 }
 
-if ((Get-EnvValue "LAST9_ENCRYPTION_KEY") -in @($null, "", "replace-with-generated-fernet-key")) {
-    Set-EnvValue "LAST9_ENCRYPTION_KEY" (New-UrlSafeKey 32)
+function New-FernetKey {
+    # Fernet needs 32 bytes as url-safe base64 WITH padding (44 chars), so unlike
+    # New-UrlSafeKey this keeps the trailing '='.
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    $buf = New-Object byte[] 32
+    $rng.GetBytes($buf)
+    $rng.Dispose()
+    return [Convert]::ToBase64String($buf).Replace("+", "-").Replace("/", "_")
+}
+
+function Test-FernetKey($key) {
+    return ($key -match '^[A-Za-z0-9+/_-]{43}=$')
+}
+
+if (-not (Test-FernetKey (Get-EnvValue "LAST9_ENCRYPTION_KEY"))) {
+    Set-EnvValue "LAST9_ENCRYPTION_KEY" (New-FernetKey)
     Ok "generated LAST9_ENCRYPTION_KEY"
 }
 if ((Get-EnvValue "JWT_SECRET") -in @($null, "", "replace-with-random-secret")) {

@@ -35,6 +35,8 @@ export function TemplatePicker({
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState("");
   const [active, setActive] = React.useState(0);
+  const [menuWidth, setMenuWidth] = React.useState<number | null>(null);
+  const wrapperRef = React.useRef<HTMLDivElement>(null);
   const buttonRef = React.useRef<HTMLButtonElement>(null);
   const searchRef = React.useRef<HTMLInputElement>(null);
 
@@ -58,7 +60,28 @@ export function TemplatePicker({
 
   React.useEffect(() => {
     if (open) searchRef.current?.focus();
-  }, [open ]);
+  }, [open]);
+
+  // The saved-search list is the one place a long name must be readable. The
+  // trigger width is only the filter column, while the page has unused room to
+  // its right; grow the menu into that room, capped by the viewport. Names still
+  // wrap if they exceed even that.
+  React.useEffect(() => {
+    if (!open) {
+      setMenuWidth(null);
+      return;
+    }
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
+    const placeMenu = () => {
+      const rect = wrapper.getBoundingClientRect();
+      const available = window.innerWidth - rect.left - 16;
+      setMenuWidth(Math.max(rect.width, Math.min(56 * 16, available)));
+    };
+    placeMenu();
+    window.addEventListener("resize", placeMenu);
+    return () => window.removeEventListener("resize", placeMenu);
+  }, [open]);
 
   React.useEffect(() => {
     setActive(0);
@@ -66,14 +89,18 @@ export function TemplatePicker({
 
   if (templates.length === 0) {
     return (
-      <button type="button" className={cn(fieldClass, "flex cursor-not-allowed opacity-60")} disabled>
+      <button
+        type="button"
+        className={cn(fieldClass, "flex cursor-not-allowed opacity-60")}
+        disabled
+      >
         <span className="truncate">No saved searches yet</span>
       </button>
     );
   }
 
   return (
-    <div className="relative">
+    <div ref={wrapperRef} className="relative">
       <div className="flex gap-1.5">
         <button
           ref={buttonRef}
@@ -81,6 +108,7 @@ export function TemplatePicker({
           className={cn(fieldClass, "flex flex-1 items-center justify-between gap-2 text-left")}
           aria-haspopup="listbox"
           aria-expanded={open}
+          title={selected ? label(selected) : undefined}
           onClick={() => (open ? close(false) : setOpen(true))}
         >
           <span className="truncate">{selected ? label(selected) : "Choose a saved search…"}</span>
@@ -108,7 +136,10 @@ export function TemplatePicker({
             className="fixed inset-0 z-40 cursor-default bg-transparent"
             onClick={() => close(false)}
           />
-          <div className="absolute inset-x-0 top-full z-50 mt-1 border border-border bg-background shadow-lg">
+          <div
+            className="absolute left-0 top-full z-50 mt-1 min-w-full border border-border bg-background shadow-lg"
+            style={menuWidth ? { width: menuWidth } : undefined}
+          >
             <div className="flex items-center gap-2 border-b border-border px-2">
               <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
               <input
@@ -148,20 +179,24 @@ export function TemplatePicker({
                   onClick={() => pick(t.id)}
                   onMouseEnter={() => setActive(i)}
                   className={cn(
-                    "flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm",
+                    "flex cursor-pointer items-start gap-2 px-3 py-1.5 text-sm",
                     i === active ? "bg-muted text-foreground" : "text-muted-foreground"
                   )}
-                  title={t.customer ? `Customer: ${t.customer}` : undefined}
+                  title={t.customer ? `${label(t)} · Customer: ${t.customer}` : label(t)}
                 >
                   {t.id === value ? (
-                    <Check className="h-3.5 w-3.5 shrink-0 text-success" />
+                    <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success" />
                   ) : (
-                    <span className="w-3.5 shrink-0" />
+                    <span className="mt-0.5 w-3.5 shrink-0" />
                   )}
-                  <span className="truncate">
-                    {t.name}
+                  <span className="min-w-0">
+                    <span className="block whitespace-normal break-words leading-snug">
+                      {t.name}
+                    </span>
                     {t.aggregation?.enabled && (
-                      <span className="opacity-60"> (with parse & aggregate)</span>
+                      <span className="mt-0.5 block text-[11px] leading-snug opacity-60">
+                        with parse &amp; aggregate
+                      </span>
                     )}
                   </span>
                 </li>

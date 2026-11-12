@@ -28,7 +28,11 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     <button
       ref={ref}
       className={cn(
-        "inline-flex items-center justify-center gap-2 font-medium transition-all duration-150",
+        // whitespace-nowrap: a label must never wrap inside the fixed-height
+        // button (that is how "New S3 profile" ended up split over two lines and
+        // spilling past its border). shrink-0 keeps a flex sibling from
+        // squeezing it; callers that need it to shrink can pass their own.
+        "inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap text-center font-medium transition-all duration-150",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
         "disabled:pointer-events-none disabled:opacity-50",
         variants[variant],

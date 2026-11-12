@@ -39,14 +39,22 @@ from app.last9 import (
     format_log_timestamp,
     iter_extraction,
     parse_bq_row,
+    preview_window_start,
     store_path,
 )
 from app.notifications import send_failure_alert
+from app.s3 import upload_job_artifacts
 
 
 class _Stopped(Exception):
     def __init__(self, status: str) -> None:
         self.status = status  # "paused" or "canceled"
+
+
+# Pause/cancel used to be observed only at a chunk boundary; a dense chunk can
+# run for hours. Poll the job row between rows so a cancel takes effect in
+# seconds and the partial file can be downloaded.
+STATUS_CHECK_SECONDS = 10.0
 
 
 def _now() -> datetime:
@@ -162,6 +170,16 @@ def value_counts_path(job_id: int, customer: str | None = None) -> str:
     return os.path.join(customer_dir(customer), f"job_{job_id}.counts.csv")
 
 
+def unmatched_path(job_id: int, customer: str | None = None) -> str:
+    """Every row the parse pattern did not match (`timestamp,message`).
+
+    Deliberately a complete artifact, not a sample: the point is to fix the
+    regex from the exact failing lines. It streams to disk as the job runs, so
+    a job with hundreds of thousands of unmatched rows does not hold them in
+    memory."""
+    return os.path.join(customer_dir(customer), f"job_{job_id}.unmatched.csv")
+
+
 def _zip_file(file_path: str, arcname: str | None = None) -> str:
     """Compress a file in-place; return zipped path. ponytail: delete raw after zipping."""
     if not file_path or not os.path.exists(file_path):
@@ -235,6 +253,8 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
         phrases=(job["filter_spec"] or {}).get("phrases", [])
         + (job["filter_spec"] or {}).get("message_types", []),
         exact_phrases=(job["filter_spec"] or {}).get("exact_phrases", []),
+        exclude_phrases=(job["filter_spec"] or {}).get("exclude_phrases", []),
+        exclude_exact_phrases=(job["filter_spec"] or {}).get("exclude_exact_phrases", []),
         ids=(job["filter_spec"] or {}).get("ids", []),
         chunk_hours=job["chunk_hours"],
         id_batch_size=job["id_batch_size"],
@@ -243,8 +263,10 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
     fmt = job["output_format"] or "csv"
     is_preview = bool(job["is_preview"])
     if is_preview:
-        # Filter test-run: only the first chunk, capped rows (see ROW_CAP below).
-        spec.end_epoch = min(spec.end_epoch, spec.start_epoch + int(spec.chunk_hours * 3600))
+        # Filter test-run: only the newest chunks, capped rows (see ROW_CAP
+        # below). The first chunk of a multi-day window is its oldest (often
+        # emptiest) hour - a healthy 7-day filter looked like it matched nothing.
+        spec.start_epoch = preview_window_start(spec.start_epoch, spec.end_epoch, spec.chunk_hours)
 
     checkpoint_json = job["checkpoint"] or {}
     cp = Checkpoint.from_dict(checkpoint_json)
@@ -274,6 +296,9 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
                 regex=agg_config.get("regex", ""),
                 group_by=agg_config.get("group_by", []),
                 unique_fields=agg_config.get("unique_fields", []),
+                # Absent in every spec written before this switch: default True
+                # keeps old jobs/schedules aggregating exactly as they did.
+                aggregate=bool(agg_config.get("aggregate", True)),
                 use_library=bool(agg_config.get("use_library")),
                 raw_columns=agg_config.get("raw_columns", []),
                 raw_column_defaults=agg_config.get("raw_column_defaults", {}),
@@ -414,10 +439,60 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
             f.flush()
         csv_writer = csv.writer(f)
 
+    # Complete unmatched-line artifact. Opened on the first unmatched row, so a
+    # clean job leaves no empty file behind. Mirroring the raw file's byte
+    # offset makes resume exact: a replayed chunk truncates back to the last
+    # committed line instead of duplicating it.
+    unmatched_file = unmatched_path(job_id, customer) if aggregator is not None else None
+    unmatched_offset = checkpoint_json.get("unmatched_offset", 0)
+    uf = None
+    unmatched_writer = None
+
+    def open_unmatched() -> None:
+        nonlocal uf, unmatched_writer
+        if uf is not None or unmatched_file is None:
+            return
+        if resuming and os.path.exists(unmatched_file):
+            uf = open(  # noqa: SIM115 - spans streaming loop
+                unmatched_file, "r+", newline="", encoding="utf-8"
+            )
+            uf.seek(unmatched_offset)
+            uf.truncate()
+        else:
+            uf = open(  # noqa: SIM115 - spans streaming loop
+                unmatched_file, "w", newline="", encoding="utf-8"
+            )
+            unmatched_writer = csv.writer(uf)
+            unmatched_writer.writerow(["timestamp", "message"])
+            return
+        unmatched_writer = csv.writer(uf)
+
     PREVIEW_CAP = 20  # rows surfaced live in the UI
     ROW_CAP = 100  # total rows for a preview/test-run job
+    # A full unmatched set can be hundreds of thousands of lines; keep enough
+    # examples to fix the regex and leave the exact total in rows_unmatched.
+    UNMATCHED_SAMPLE_CAP = 20
+    UNMATCHED_SAMPLE_CHARS = 2000
     preview_sample: list[dict] = []
+    unmatched_samples: list[dict] = []
+    # Samples are for diagnosis, so show distinct messages; the complete
+    # artifact still contains every unmatched row, duplicates included.
+    seen_unmatched: set[str] = set()
     bq_unmatched = 0
+
+    if is_preview:
+        # Say which slice was sampled: the job's own start/end still show the
+        # full window the operator selected, so a small chunk count otherwise
+        # looks like the extraction ignored the window.
+        with eng.begin() as conn:
+            db.add_event(
+                conn,
+                job_id,
+                f"Filter test: sampling up to {total} chunk{'' if total == 1 else 's'} from "
+                f"{format_log_timestamp(spec.start_epoch, 'UTC')} to "
+                f"{format_log_timestamp(spec.end_epoch, 'UTC')}, up to "
+                f"{ROW_CAP} rows. Run the full extraction to process the whole window.",
+            )
 
     # A chunk can legitimately take hours: India/Frankfurt volumes reach millions
     # of rows per chunk and Last9's 502s add retry time. Progress used to be
@@ -437,6 +512,19 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
         # Aggregator.process. Splitting it would run every regex twice per row
         # and double every per-format tally.
         parsed = aggregator.process(row.message) if aggregator is not None else None
+        if aggregator is not None and parsed is None:
+            open_unmatched()
+            if unmatched_writer is not None:
+                unmatched_writer.writerow([ts, row.message])
+            if len(unmatched_samples) < UNMATCHED_SAMPLE_CAP and row.message not in seen_unmatched:
+                # The line itself is what makes a non-match diagnosable; counts
+                # alone say "the regex is wrong" without showing how. Dedupe the
+                # display sample — the same line repeated 20 times hides the
+                # other failing shapes.
+                seen_unmatched.add(row.message)
+                unmatched_samples.append(
+                    {"timestamp": ts, "message": row.message[:UNMATCHED_SAMPLE_CHARS]}
+                )
         if f is not None:
             include_message = aggregator is None or aggregator.include_message
             if fmt == "jsonl":
@@ -485,6 +573,9 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
         if f is not None:
             f.flush()
             os.fsync(f.fileno())
+        if uf is not None:
+            uf.flush()
+            os.fsync(uf.fileno())
         delta = cp.rows_written - last_rows
         last_rows = cp.rows_written
 
@@ -508,7 +599,11 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
         )
         total = cp.completed_chunks + remaining
 
-        checkpoint_extra = {"file_offset": f.tell() if f is not None else 0, "chunk_hours": h}
+        checkpoint_extra = {
+            "file_offset": f.tell() if f is not None else 0,
+            "unmatched_offset": uf.tell() if uf is not None else 0,
+            "chunk_hours": h,
+        }
         update_fields: dict = {
             "completed_chunks": cp.completed_chunks,
             "total_chunks": total,
@@ -522,7 +617,10 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
             # index makes the commit idempotent — occurrence counts add, so a
             # chunk replayed after a crash must not be counted a second time.
             aggregator.flush(cp.completed_chunks - 1)
-            update_fields["aggregation_result"] = aggregator.snapshot()
+            snapshot = aggregator.snapshot()
+            snapshot["unmatched_samples"] = list(unmatched_samples)
+            snapshot["unmatched_sample_cap"] = UNMATCHED_SAMPLE_CAP
+            update_fields["aggregation_result"] = snapshot
         update_fields["checkpoint"] = {**cp.to_dict(), **checkpoint_extra}
 
         with eng.begin() as conn:
@@ -541,10 +639,17 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
 
     written = 0
     last_beat = time.monotonic()
+    last_status_check = time.monotonic()
     try:
         for row in iter_extraction(client, spec, checkpoint=cp, on_chunk_complete=on_chunk):
             write_row(row)
             written += 1
+            if time.monotonic() - last_status_check >= STATUS_CHECK_SECONDS:
+                last_status_check = time.monotonic()
+                with eng.begin() as conn:
+                    live_status = db.current_status(conn, job_id)
+                if live_status in ("paused", "canceled"):
+                    raise _Stopped(live_status)
             # Keep the job looking alive while one large chunk streams. The
             # reaper reads job_events, and a chunk that takes longer than
             # STALE_JOB_MINUTES otherwise looks like a dead worker.
@@ -563,21 +668,45 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
         if f is not None:
             f.flush()
             f.close()
+        if uf is not None:
+            uf.flush()
+            uf.close()
         if distinct_store is not None:
             distinct_store.close()
         http.close()
         with eng.begin() as conn:
             if stop.status == "canceled":
-                db.update_job(conn, job_id, status="canceled", finished_at=_now())
-                db.add_event(conn, job_id, "Job canceled", level="warn")
+                db.update_job(
+                    conn,
+                    job_id,
+                    status="canceled",
+                    finished_at=_now(),
+                    rows_written=written,
+                    preview=preview_sample,
+                )
+                db.add_event(
+                    conn,
+                    job_id,
+                    f"Job canceled — partial output available ({written:,} rows)",
+                    level="warn",
+                )
             else:
-                db.update_job(conn, job_id, status="paused")
+                db.update_job(
+                    conn,
+                    job_id,
+                    status="paused",
+                    rows_written=written,
+                    preview=preview_sample,
+                )
                 db.add_event(conn, job_id, "Job paused")
         return
     except (Last9Error, Exception) as exc:  # noqa: BLE001 - record any failure on the job
         if f is not None:
             f.flush()
             f.close()
+        if uf is not None:
+            uf.flush()
+            uf.close()
         if distinct_store is not None:
             distinct_store.close()
         http.close()
@@ -595,16 +724,22 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
     if f is not None:
         f.flush()
         f.close()
+    if uf is not None:
+        uf.flush()
+        uf.close()
     http.close()
 
     summary = None
     counts = None
     if aggregator is not None:
         aggregator.flush()
-        summary = summary_path(job_id, customer)
-        aggregator.write_summary_csv(summary)
-        counts = value_counts_path(job_id, customer)
-        aggregator.write_value_counts_csv(counts)
+        # Parse-only: there are no distinct values, so an empty summary/counts
+        # pair would just be two misleading downloads.
+        if aggregator.aggregate:
+            summary = summary_path(job_id, customer)
+            aggregator.write_summary_csv(summary)
+            counts = value_counts_path(job_id, customer)
+            aggregator.write_value_counts_csv(counts)
 
     # BigQuery load — must happen before compression so we have a plain CSV
     if (
@@ -644,6 +779,9 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
     counts_arcname = export_entry_name(
         job_id, search_label, spec.start_epoch, spec.end_epoch, "counts", "csv"
     )
+    unmatched_arcname = export_entry_name(
+        job_id, search_label, spec.start_epoch, spec.end_epoch, "unmatched", "csv"
+    )
 
     if f is not None and not is_preview:
         path = _zip_file(path, arcname=raw_arcname)
@@ -651,11 +789,64 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
         summary = _zip_file(summary, arcname=summary_arcname)
     if counts is not None and not is_preview:
         counts = _zip_file(counts, arcname=counts_arcname)
+    if unmatched_file and uf is not None and not is_preview:
+        unmatched_file = _zip_file(unmatched_file, arcname=unmatched_arcname)
+
+    # S3 delivery runs before the job is marked complete. The local files stay in
+    # place (downloads/retention unchanged); S3 is an additional copy so a failed
+    # upload can be inspected with a retry instead of losing the extraction.
+    s3_uris: dict[str, str] = {}
+    s3_error: str | None = None
+    if not is_preview and job.get("s3_profile_id"):
+        with eng.begin() as conn:
+            profile = db.load(conn, db.s3_profiles, job["s3_profile_id"])
+            db.add_event(conn, job_id, "Uploading output to S3…")
+        if profile is None:
+            s3_error = "S3 profile no longer exists"
+        else:
+            upload_job = {
+                **job,
+                "output_file_path": path,
+                "summary_file_path": summary,
+                "counts_file_path": counts,
+            }
+            try:
+                s3_uris, s3_errors = upload_job_artifacts(upload_job, dict(profile))
+                if s3_errors:
+                    s3_error = "; ".join(s3_errors)
+            except Exception as exc:  # noqa: BLE001 - keep the completed extraction
+                s3_error = str(exc)
+        if s3_uris:
+            with eng.begin() as conn:
+                db.add_event(
+                    conn,
+                    job_id,
+                    "S3 upload complete: " + ", ".join(s3_uris.values()),
+                )
+        if s3_error:
+            with eng.begin() as conn:
+                db.add_event(conn, job_id, f"S3 upload failed: {s3_error}", level="warn")
 
     with eng.begin() as conn:
         final: dict = {"status": "completed", "finished_at": _now(), "preview": preview_sample}
+        if job.get("s3_profile_id"):
+            final.update(
+                s3_uri=s3_uris.get("raw"),
+                s3_summary_uri=s3_uris.get("summary"),
+                s3_counts_uri=s3_uris.get("counts"),
+                s3_error=s3_error,
+                s3_uploaded_at=_now() if s3_uris else None,
+            )
         if is_preview:
-            final.update(rows_written=written, completed_chunks=1, total_chunks=1)
+            # A preview samples the newest part of the window, so its chunk
+            # counts are not a completion ratio for the selected window. Report
+            # what it actually ran instead of hard-coding 1/1 (a three-chunk
+            # sample used to display as "1 / 1").
+            final.update(
+                rows_written=written,
+                completed_chunks=cp.completed_chunks,
+                total_chunks=max(total, cp.completed_chunks),
+            )
         else:
             final["output_file_path"] = path
             # Only when the checkpoint actually reached the end: that is the
@@ -683,17 +874,27 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
             msg += f" — {bq_unmatched} row(s) didn't match any BQ log pattern"
         if aggregator is not None:
             snap = aggregator.snapshot()
+            # The last on_chunk snapshot can predate the final partial chunk (a
+            # preview stops at ROW_CAP mid-chunk), so refresh it here too.
+            snap["unmatched_samples"] = list(unmatched_samples)
+            snap["unmatched_sample_cap"] = UNMATCHED_SAMPLE_CAP
             final["aggregation_result"] = snap
             final["summary_file_path"] = summary
             final["counts_file_path"] = counts
-            msg += (
-                f" — parsed {snap['rows_matched']} matching row(s) "
-                f"across {snap['total_groups']} group(s)"
-            )
+            final["unmatched_file_path"] = unmatched_file if uf is not None else None
+            if aggregator.aggregate:
+                msg += (
+                    f" — parsed {snap['rows_matched']} matching row(s) "
+                    f"across {snap['total_groups']} group(s)"
+                )
+            else:
+                msg += f" — parsed {snap['rows_matched']} row(s)"
             if snap["rows_unmatched"]:
                 msg += f", {snap['rows_unmatched']} row(s) didn't match the parse pattern"
         db.update_job(conn, job_id, **final)
         db.add_event(conn, job_id, msg)
+        if s3_error:
+            _send_alert_if_scheduled(conn, job, f"S3 upload failed: {s3_error}")
 
     # Kept open until here: the summary CSV is written from it. The file itself
     # survives the job — the month-end rollup merges it.

@@ -18,6 +18,11 @@ COMPOSE="docker compose -f docker-compose.yml -f docker-compose.prod.yml"
 echo "Building: $SERVICES"
 $COMPOSE build $SERVICES
 
+# The API does not migrate on startup: without this, a deploy that adds a
+# migration runs new code against the old schema. `upgrade head` is idempotent.
+echo "Migrating database"
+$COMPOSE run --rm --no-deps api alembic upgrade head
+
 echo "Redeploying: $SERVICES"
 $COMPOSE up -d --no-deps $SERVICES
 

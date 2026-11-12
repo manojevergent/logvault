@@ -101,8 +101,8 @@ def test_a_log_line_at_either_edge_of_the_day_falls_inside_the_window():
     assert before_ns // 1_000_000_000 < start
     assert after_ns // 1_000_000_000 >= end
 
-    assert format_log_timestamp(first_ns, "UTC") == "2026-08-30 00:00:00.000"
-    assert format_log_timestamp(last_ns, "UTC") == "2026-08-30 23:59:59.999"
+    assert format_log_timestamp(first_ns, "UTC") == "2026-08-30 00:00:00:000 UTC"
+    assert format_log_timestamp(last_ns, "UTC") == "2026-08-30 23:59:59:999 UTC"
 
 
 # 2024-01-01 00:00:00 UTC == 05:30:00 IST, expressed in each unit Last9 might use.
@@ -116,24 +116,24 @@ _MOMENT = {
 
 @pytest.mark.parametrize("unit,value", sorted(_MOMENT.items()))
 def test_log_timestamp_units_all_resolve_to_the_same_moment(unit, value):
-    assert format_log_timestamp(value, "IST") == "2024-01-01 05:30:00.000", unit
+    assert format_log_timestamp(value, "IST") == "2024-01-01 05:30:00:000 IST", unit
 
 
 def test_log_timestamp_defaults_to_utc():
     """Exports carry UTC so the timestamp column can be checked directly against
     the job's window without a mental offset."""
-    assert format_log_timestamp(1704067200) == "2024-01-01 00:00:00.000"
+    assert format_log_timestamp(1704067200) == "2024-01-01 00:00:00:000 UTC"
 
 
 def test_log_timestamp_is_the_real_nanosecond_value_not_a_float(tmp_path):
     """1787840566975000000 exceeds 2^53, so anything that round-trips it through
     a float loses the sub-second digits — which is what Excel showed as
     1.78784E+18."""
-    assert format_log_timestamp("1787840566975000000", "UTC").endswith(".975")
+    assert format_log_timestamp("1787840566975000000", "UTC").endswith(":975 UTC")
 
 
 def test_log_timestamp_keeps_millisecond_precision():
-    assert format_log_timestamp(1704067200_123, "UTC") == "2024-01-01 00:00:00.123"
+    assert format_log_timestamp(1704067200_123, "UTC") == "2024-01-01 00:00:00:123 UTC"
 
 
 def test_log_timestamp_passes_through_anything_not_an_integer():

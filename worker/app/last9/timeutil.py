@@ -60,7 +60,11 @@ def format_log_timestamp(value: str | int | None, tz_name: str = "UTC") -> str:
     n = int(text)
     divisor = next(d for threshold, d in _UNIT_SCALES if abs(n) >= threshold)
     dt = datetime.fromtimestamp(n / divisor, _resolve(tz_name))
-    return dt.strftime("%Y-%m-%d %H:%M:%S.") + f"{dt.microsecond // 1000:03d}"
+    # Matches Last9's own rendering, including the colon before milliseconds and
+    # the literal zone suffix: 2026-11-12 10:38:12:632 UTC. `strftime` has no
+    # millisecond directive, hence the manual tail.
+    zone = tz_name.upper()
+    return dt.strftime("%Y-%m-%d %H:%M:%S:") + f"{dt.microsecond // 1000:03d} {zone}"
 
 
 def previous_calendar_day_window(now_epoch: int, tz_name: str = "UTC") -> tuple[int, int]:

@@ -81,6 +81,28 @@ def test_id_regex_escapes_but_keeps_hyphens():
     assert build_id_regex(["a.b", "ID-1"]) == r"a\.b|ID-1"
 
 
+def test_exclusions_are_not_contains_and_not_regex():
+    q = build_filter_query(
+        phrases=["LIGHTBOX"],
+        exclude_phrases=["healthcheck"],
+        exclude_exact_phrases=["API : 502"],
+    )
+    assert q == {
+        "$and": [
+            {"$contains": ["Body", "LIGHTBOX"]},
+            {"$notcontains": ["Body", "healthcheck"]},
+            {"$notregex": ["Body", "API\\s+:\\s+502"]},
+        ]
+    }
+
+
+def test_exclusions_alone_do_not_make_a_filter():
+    # NOT A alone would scan the whole index and discard almost everything; a
+    # positive clause is still required (and the UI enforces it too).
+    with pytest.raises(PipelineError):
+        build_filter_query(exclude_phrases=["noise"])
+
+
 def test_empty_filter_raises():
     with pytest.raises(PipelineError):
         build_filter_query()

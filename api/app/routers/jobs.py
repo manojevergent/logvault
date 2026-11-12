@@ -7,7 +7,8 @@ import contextlib
 import json
 import os
 import re
-from collections.abc import AsyncIterator
+import zipfile
+from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, datetime
 from typing import Literal, cast
 
@@ -18,11 +19,21 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app import audit, signing
+from app import audit, s3, signing
 from app.aggregation import validate_aggregation
 from app.database import SessionLocal, get_db
 from app.deps import get_current_user
-from app.models import FilterTemplate, IndexTarget, Job, JobEvent, Last9Credential, Schedule, User
+from app.format_registry import register_aggregation_pattern
+from app.models import (
+    FilterTemplate,
+    IndexTarget,
+    Job,
+    JobEvent,
+    Last9Credential,
+    S3Profile,
+    Schedule,
+    User,
+)
 from app.portability import credential_ref, index_ref, resolve_credential, resolve_index
 from app.schemas import (
     BatchCreate,
@@ -33,8 +44,9 @@ from app.schemas import (
     JobStats,
     JobStatus,
     RollupCreate,
+    S3ProfileRef,
 )
-from app.tasks_client import dispatch_job
+from app.tasks_client import dispatch_job, dispatch_s3_upload
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -45,6 +57,14 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 public_router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 _TERMINAL = {"completed", "failed", "canceled"}
+# A partial run still has a downloadable file. "running" is excluded: the worker
+# holds that file open and is still appending to it.
+_DOWNLOADABLE = {"completed", "failed", "canceled", "paused"}
+
+# Progress-stream cadence. A running job gets a live tick; anything else is
+# polled less often because its numbers only move when a worker picks it up.
+_PROGRESS_POLL_RUNNING = 1.0
+_PROGRESS_POLL_IDLE = 3.0
 
 
 def _to_out(job: Job, credential_label: str | None = None, check_files: bool = True) -> JobOut:
@@ -61,7 +81,7 @@ def _to_out(job: Job, credential_label: str | None = None, check_files: bool = T
                 pass
     else:
         out.has_output = bool(job.output_file_path)
-    if job.status == "completed" and out.has_output:
+    if job.status in _DOWNLOADABLE and out.has_output:
         out.download_url = signing.make_download_url(job.id)
     if check_files:
         # Single-job fetches only: the list view has no stream to open, and
@@ -72,13 +92,19 @@ def _to_out(job: Job, credential_label: str | None = None, check_files: bool = T
             job.summary_file_path or ""
         )
         out.has_counts = bool(job.counts_file_path) and os.path.exists(job.counts_file_path or "")
+        out.has_unmatched = bool(job.unmatched_file_path) and os.path.exists(
+            job.unmatched_file_path or ""
+        )
     else:
         out.has_summary = bool(job.summary_file_path)
         out.has_counts = bool(job.counts_file_path)
+        out.has_unmatched = bool(job.unmatched_file_path)
     if out.has_summary:
         out.summary_url = signing.make_download_url(job.id) + "&kind=summary"
     if out.has_counts:
         out.counts_url = signing.make_download_url(job.id) + "&kind=counts"
+    if out.has_unmatched:
+        out.unmatched_url = signing.make_download_url(job.id) + "&kind=unmatched"
     out.credential_label = credential_label
     return out
 
@@ -111,7 +137,9 @@ def _timeframe(start_epoch: int, end_epoch: int) -> str:
     return f"{start:%Y-%m-%d_%H%M}-{last:%Y-%m-%d_%H%M}"
 
 
-def download_filename(job: Job, kind: str = "raw", *, compressed: bool = True) -> str:
+def download_filename(
+    job: Job, kind: str = "raw", *, compressed: bool = True, text: bool = False
+) -> str:
     """`<saved search>_<job id>_<timeframe>[_summary|_counts].<ext>[.zip]`, e.g.
     AHA_CGetEntitlements_16_2026-08-30_counts.csv.zip — exported files are
     compressed by default. The job id disambiguates batch runs, where several
@@ -124,6 +152,9 @@ def download_filename(job: Job, kind: str = "raw", *, compressed: bool = True) -
     zip reader) report the download as a corrupt archive — the bytes never
     were one.
 
+    `text` names the same bytes as `.txt`; the TXT download is always a plain
+    file, never a zip, because the caller streams the archive's contents.
+
     Falls back to the job id when the job wasn't created from a saved search.
     """
     label = (job.filter_spec or {}).get("label")
@@ -133,8 +164,12 @@ def download_filename(job: Job, kind: str = "raw", *, compressed: bool = True) -
     else:
         stem = f"logvault_job_{job.id}"
     name = f"{stem}_{_timeframe(job.start_epoch, job.end_epoch)}"
+    if text:
+        if kind in ("summary", "counts", "unmatched"):
+            return f"{name}_{kind}.txt"
+        return f"{name}.txt"
     suffix = ".zip" if compressed else ""
-    if kind in ("summary", "counts"):
+    if kind in ("summary", "counts", "unmatched"):
         return f"{name}_{kind}.csv{suffix}"
     ext = "jsonl" if job.output_format == "jsonl" else "csv"
     return f"{name}.{ext}{suffix}"
@@ -159,6 +194,7 @@ def _validate_agg_dict(agg: dict | None) -> None:
                 agg.get("raw_columns", []),
                 agg.get("raw_column_defaults", {}),
                 agg.get("use_library", False),
+                agg.get("aggregate", True),
             )
         except ValueError as exc:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
@@ -175,19 +211,25 @@ def _new_job_row(
     id_batch_size: int,
     phrases: list[str],
     ids: list[str],
-    exact_phrases: list[str],
+    exact_phrases: list[str] | None = None,
+    exclude_phrases: list[str] | None = None,
+    exclude_exact_phrases: list[str] | None = None,
     message_types: list[str],
     output_format: str,
     is_preview: bool,
     aggregation: dict | None,
     label: str,
     customer: str,
+    s3_profile_id: int | None,
+    s3_destination: dict | None,
     created_by: str | None,
 ) -> Job:
     filter_spec: dict = {
         "phrases": phrases,
         "ids": ids,
-        "exact_phrases": exact_phrases,
+        "exact_phrases": exact_phrases or [],
+        "exclude_phrases": exclude_phrases or [],
+        "exclude_exact_phrases": exclude_exact_phrases or [],
         "message_types": message_types,
     }
     if aggregation:
@@ -208,6 +250,8 @@ def _new_job_row(
         filter_spec=filter_spec,
         output_format=output_format,
         is_preview=is_preview,
+        s3_profile_id=s3_profile_id,
+        s3_destination=s3_destination,
         # Same column scheduled runs use for "schedule:N". It was left NULL for
         # everything created here, so nothing recorded who ran an extraction —
         # and the worker's failure net tripped over the None.
@@ -225,6 +269,11 @@ def create_job(
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY, "Search Name / Extraction Label is required"
         )
+    if not (body.phrases or body.ids or body.exact_phrases or body.message_types):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "a filter needs at least one required phrase, exact phrase, ID or message type",
+        )
     agg = body.aggregation.model_dump() if body.aggregation else None
     _validate_agg_dict(agg)
 
@@ -235,6 +284,7 @@ def create_job(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "credential no longer exists")
     if db.get(IndexTarget, body.index_target_id) is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "index no longer exists")
+    s3_profile = s3.profile_or_422(db, body.s3_profile_id)
 
     job = _new_job_row(
         credential_id=body.credential_id,
@@ -247,16 +297,28 @@ def create_job(
         phrases=body.phrases,
         ids=body.ids,
         exact_phrases=body.exact_phrases,
+        exclude_phrases=body.exclude_phrases,
+        exclude_exact_phrases=body.exclude_exact_phrases,
         message_types=body.message_types,
         output_format=body.output_format,
         is_preview=body.is_preview,
         aggregation=agg,
         label=body.label,
         customer=body.customer,
+        s3_profile_id=body.s3_profile_id,
+        s3_destination=s3.destination_snapshot(s3_profile),
         created_by=user.email,
     )
     db.add(job)
     db.flush()
+    register_aggregation_pattern(
+        db,
+        aggregation=agg,
+        source_name=body.label,
+        source_kind="job",
+        source_id=job.id,
+        created_by=user.email,
+    )
     audit.record(db, "create", "job", job.id, {"region": job.region_code}, user_id=user.email)
     db.commit()
     db.refresh(job)
@@ -292,7 +354,7 @@ def create_batch(
 
     # (template, aggregation, resolved credential/index/region). Resolved once
     # here so validation and creation can't disagree about the source.
-    plans: list[tuple[FilterTemplate, dict | None, int, int, str]] = []
+    plans: list[tuple[FilterTemplate, dict | None, int, int, str, S3Profile | None]] = []
     for item in body.items:
         tpl = db.get(FilterTemplate, item.template_id)
         if tpl is None:
@@ -324,7 +386,8 @@ def create_batch(
             )
         agg = dict(tpl.aggregation) if tpl.aggregation else None
         _validate_agg_dict(agg)
-        plans.append((tpl, agg, credential_id, index_target_id, region_code))
+        s3_profile = s3.profile_or_422(db, tpl.s3_profile_id)
+        plans.append((tpl, agg, credential_id, index_target_id, region_code, s3_profile))
 
     jobs = [
         _new_job_row(
@@ -338,19 +401,23 @@ def create_batch(
             phrases=list(tpl.phrases),
             ids=list(tpl.ids),
             exact_phrases=list(tpl.exact_phrases),
+            exclude_phrases=list(tpl.exclude_phrases),
+            exclude_exact_phrases=list(tpl.exclude_exact_phrases),
             message_types=list(tpl.message_types),
             output_format=body.output_format,
             is_preview=body.is_preview,
             aggregation=agg,
             label=tpl.name,
             customer=tpl.customer or "",
+            s3_profile_id=s3_profile.id if s3_profile else None,
+            s3_destination=s3.destination_snapshot(s3_profile),
             created_by=user.email,
         )
-        for tpl, agg, credential_id, index_target_id, region_code in plans
+        for tpl, agg, credential_id, index_target_id, region_code, s3_profile in plans
     ]
     db.add_all(jobs)
     db.flush()
-    for job, (tpl, _agg, _cred, _idx, _region) in zip(jobs, plans, strict=True):
+    for job, (tpl, _agg, _cred, _idx, _region, _s3) in zip(jobs, plans, strict=True):
         audit.record(
             db,
             "create",
@@ -373,6 +440,28 @@ def create_batch(
     return [_to_out(job, credential_label=labels.get(job.credential_id)) for job in jobs]
 
 
+@router.post("/{job_id}/s3-upload", response_model=JobOut)
+def retry_s3_upload(
+    job_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> JobOut:
+    """Queue a retry of S3 delivery without re-running the extraction."""
+    job = _get_or_404(db, job_id)
+    if job.is_preview:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "previews are not uploaded to S3")
+    if not job.s3_profile_id:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "this job has no S3 destination")
+    if job.status != "completed":
+        raise HTTPException(status.HTTP_409_CONFLICT, f"cannot upload a {job.status} job")
+    dispatch_s3_upload(job.id)
+    audit.record(
+        db, "s3_upload", "job", job.id, {"profile_id": job.s3_profile_id}, user_id=user.email
+    )
+    db.commit()
+    return _to_out(job, credential_label=_cred_label(db, job.credential_id))
+
+
 @router.get("/{job_id}/export", response_model=JobExport)
 def export_job(job_id: int, db: Session = Depends(get_db)) -> JobExport:
     """Portable config for this job — the credential and index are resolved to
@@ -386,6 +475,7 @@ def export_job(job_id: int, db: Session = Depends(get_db)) -> JobExport:
             status.HTTP_409_CONFLICT, "this job's credential or index no longer exists"
         )
     fs = job.filter_spec or {}
+    s3_profile = db.get(S3Profile, job.s3_profile_id) if job.s3_profile_id else None
     return JobExport(
         label=fs.get("label", ""),
         customer=fs.get("customer", ""),
@@ -400,8 +490,11 @@ def export_job(job_id: int, db: Session = Depends(get_db)) -> JobExport:
         phrases=fs.get("phrases", []),
         ids=fs.get("ids", []),
         exact_phrases=fs.get("exact_phrases", []),
+        exclude_phrases=fs.get("exclude_phrases", []),
+        exclude_exact_phrases=fs.get("exclude_exact_phrases", []),
         message_types=fs.get("message_types", []),
         aggregation=fs.get("aggregation"),
+        s3_profile=S3ProfileRef(name=s3_profile.name) if s3_profile else None,
     )
 
 
@@ -411,6 +504,14 @@ def import_job(body: JobExport, db: Session = Depends(get_db)) -> JobOut:
     (aggregation regex, etc.) applies as a job made through the wizard."""
     cred = resolve_credential(db, body.credential)
     idx = resolve_index(db, body.index)
+    s3_profile = None
+    if body.s3_profile:
+        s3_profile = s3.profile_by_name(db, body.s3_profile.name)
+        if s3_profile is None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"S3 profile {body.s3_profile.name!r} does not exist",
+            )
     if body.output_format not in ("csv", "jsonl"):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -429,11 +530,14 @@ def import_job(body: JobExport, db: Session = Depends(get_db)) -> JobOut:
         phrases=body.phrases,
         ids=body.ids,
         exact_phrases=body.exact_phrases,
+        exclude_phrases=body.exclude_phrases,
+        exclude_exact_phrases=body.exclude_exact_phrases,
         message_types=body.message_types,
         output_format=cast(Literal["csv", "jsonl"], body.output_format),
         aggregation=body.aggregation,
         label=body.label,
         customer=body.customer,
+        s3_profile_id=s3_profile.id if s3_profile else None,
     )
     return create_job(job_in, db)
 
@@ -510,6 +614,10 @@ def create_rollup(
 # `aggregation_result`, `rollup_of` and `checkpoint` are job-detail-only and can
 # each run to megabytes, so the list query never reads them off disk. Selecting
 # columns rather than entities also skips ORM instance construction entirely.
+# `filter_spec.ids` routinely holds thousands of account IDs (the largest job
+# here carries a 12 kB spec). List views only ever read the label and the
+# customer, so the query extracts just those two keys instead of shipping and
+# deserializing the whole document on every poll.
 _LIST_COLUMNS = (
     Job.id,
     Job.status,
@@ -520,7 +628,8 @@ _LIST_COLUMNS = (
     Job.end_epoch,
     Job.chunk_hours,
     Job.id_batch_size,
-    Job.filter_spec,
+    Job.filter_spec["label"].as_string().label("filter_label"),
+    Job.filter_spec["customer"].as_string().label("filter_customer"),
     Job.rows_written,
     Job.total_chunks,
     Job.completed_chunks,
@@ -535,6 +644,11 @@ _LIST_COLUMNS = (
     Job.output_file_path,
     Job.summary_file_path,
     Job.counts_file_path,
+    Job.unmatched_file_path,
+    Job.s3_profile_id,
+    Job.s3_destination,
+    Job.s3_uri,
+    Job.s3_error,
 )
 
 # `filter_spec.ids` routinely holds thousands of account IDs. List views only
@@ -548,7 +662,11 @@ def _row_to_out(row, credential_label: str | None) -> JobOut:
     Mirrors _to_out(check_files=False): a path being set is enough to know the
     file was written, so no os.stat() per row.
     """
-    spec = row["filter_spec"] or {}
+    # The two keys were extracted in SQL; rebuild the sparse dict the list
+    # response has always carried instead of the full stored document.
+    spec = {
+        key: row[f"filter_{key}"] for key in _LIST_FILTER_KEYS if row[f"filter_{key}"] is not None
+    }
     out = JobOut(
         id=row["id"],
         status=row["status"],
@@ -559,7 +677,7 @@ def _row_to_out(row, credential_label: str | None) -> JobOut:
         end_epoch=row["end_epoch"],
         chunk_hours=row["chunk_hours"],
         id_batch_size=row["id_batch_size"],
-        filter_spec={k: spec[k] for k in _LIST_FILTER_KEYS if k in spec},
+        filter_spec=spec,
         rows_written=row["rows_written"],
         total_chunks=row["total_chunks"],
         completed_chunks=row["completed_chunks"],
@@ -575,13 +693,20 @@ def _row_to_out(row, credential_label: str | None) -> JobOut:
         has_output=bool(row["output_file_path"]),
         has_summary=bool(row["summary_file_path"]),
         has_counts=bool(row["counts_file_path"]),
+        has_unmatched=bool(row["unmatched_file_path"]),
+        s3_profile_id=row["s3_profile_id"],
+        s3_destination=row["s3_destination"],
+        s3_uri=row["s3_uri"],
+        s3_error=row["s3_error"],
     )
-    if out.status == "completed" and out.has_output:
+    if out.status in _DOWNLOADABLE and out.has_output:
         out.download_url = signing.make_download_url(out.id)
     if out.has_summary:
         out.summary_url = signing.make_download_url(out.id) + "&kind=summary"
     if out.has_counts:
         out.counts_url = signing.make_download_url(out.id) + "&kind=counts"
+    if out.has_unmatched:
+        out.unmatched_url = signing.make_download_url(out.id) + "&kind=unmatched"
     return out
 
 
@@ -659,7 +784,7 @@ def pause_job(job_id: int, db: Session = Depends(get_db)) -> JobOut:
     job = _get_or_404(db, job_id)
     if job.status not in ("queued", "running"):
         raise HTTPException(status.HTTP_409_CONFLICT, f"cannot pause a {job.status} job")
-    job.status = "paused"  # worker stops at the next chunk boundary
+    job.status = "paused"  # the worker notices within ~10s
     db.commit()
     db.refresh(job)
     return _to_out(job, credential_label=_cred_label(db, job.credential_id))
@@ -711,6 +836,7 @@ def delete_job_files(
         job.output_file_path,
         job.summary_file_path,
         job.counts_file_path,
+        job.unmatched_file_path,
     ]
 
     for file_path in paths_to_remove:
@@ -728,6 +854,7 @@ def delete_job_files(
     job.output_file_path = None
     job.summary_file_path = None
     job.counts_file_path = None
+    job.unmatched_file_path = None
 
     db.add(JobEvent(job_id=job.id, message="Extracted output files deleted from disk"))
     audit.record(db, "delete_files", "job", job.id, user_id=user.email)
@@ -810,6 +937,8 @@ def retry_job(
         filter_spec=orig.filter_spec,
         output_format=orig.output_format,
         is_preview=orig.is_preview,
+        s3_profile_id=orig.s3_profile_id,
+        s3_destination=orig.s3_destination,
         # Both carried deliberately. Dropping `created_by` detached a retried
         # scheduled day from its schedule, so the month-end rollup's
         # `schedule:N` filter skipped it and under-reported. Dropping
@@ -827,40 +956,97 @@ def retry_job(
     return _to_out(job, credential_label=_cred_label(db, job.credential_id))
 
 
-@public_router.get("/{job_id}/download")
+_TEXT_CHUNK_SIZE = 64 * 1024
+
+
+def _validate_text_archive(path: str) -> None:
+    """A TXT download streams a zip's member, so reject a corrupt archive
+    before the response starts instead of failing halfway through the body."""
+    if not path.endswith(".zip"):
+        return
+    try:
+        with zipfile.ZipFile(path) as zf:
+            if not any(not name.endswith("/") for name in zf.namelist()):
+                raise HTTPException(status.HTTP_409_CONFLICT, "stored archive is empty")
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, "stored archive is corrupt") from exc
+
+
+def _text_download_stream(path: str) -> Iterator[bytes]:
+    """Yield the stored comma-separated bytes, decompressing on the fly.
+
+    The TXT download is deliberately not a `.txt.zip`: the caller asked for a
+    text file, so a zipped extract is opened and streamed member by member.
+    Chunked reads keep a multi-GB extract out of memory.
+    """
+    if path.endswith(".zip"):
+        with zipfile.ZipFile(path) as zf:
+            for name in zf.namelist():
+                if name.endswith("/"):
+                    continue
+                with zf.open(name) as member:
+                    while chunk := member.read(_TEXT_CHUNK_SIZE):
+                        yield chunk
+        return
+    with open(path, "rb") as fh:
+        while chunk := fh.read(_TEXT_CHUNK_SIZE):
+            yield chunk
+
+
+@public_router.get("/{job_id}/download", response_model=None)
 def download(
     job_id: int,
     exp: int,
     sig: str,
     kind: str = "raw",
+    file_format: Literal["csv", "txt"] = Query(default="csv", alias="format"),
     db: Session = Depends(get_db),
-) -> FileResponse:
-    # `kind` is deliberately outside the signature: both artifacts belong to the
-    # same job and carry the same authorization decision, so being able to flip
-    # between them grants nothing a valid link didn't already grant.
+) -> FileResponse | StreamingResponse:
+    # `kind` and `format` are deliberately outside the signature: both
+    # artifacts and both names describe the same authorized bytes, so flipping
+    # them grants nothing a valid link didn't already grant.
     if not signing.verify(job_id, exp, sig):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "invalid or expired link")
     job = _get_or_404(db, job_id)
-    if kind in ("summary", "counts"):
-        attr = "summary_file_path" if kind == "summary" else "counts_file_path"
+    if kind in ("summary", "counts", "unmatched"):
+        attr = {
+            "summary": "summary_file_path",
+            "counts": "counts_file_path",
+            "unmatched": "unmatched_file_path",
+        }[kind]
         path = getattr(job, attr)
         if not path or not os.path.exists(path):
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"no {kind} file")
-        # Whether it's actually a zip is a fact about the file, not the kind —
-        # ZIP_EXPORTS=false writes every artifact plain, previews included.
-        compressed = path.endswith(".zip")
-        return FileResponse(
-            path,
-            media_type="application/zip" if compressed else "text/csv",
-            filename=download_filename(job, kind, compressed=compressed),
+    else:
+        path = job.output_file_path
+        if not path or not os.path.exists(path):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no output file")
+        if file_format == "txt" and (
+            job.output_format == "jsonl" or path.endswith(".jsonl") or path.endswith(".jsonl.zip")
+        ):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "TXT download is only available for comma-separated extracts",
+            )
+
+    # Whether it's actually a zip is a fact about the file, not the kind —
+    # ZIP_EXPORTS=false writes every artifact plain, previews included.
+    compressed = path.endswith(".zip")
+    if file_format == "txt":
+        _validate_text_archive(path)
+        filename = download_filename(job, kind, text=True)
+        return StreamingResponse(
+            _text_download_stream(path),
+            media_type="text/plain; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "X-Content-Type-Options": "nosniff",
+            },
         )
-    if not job.output_file_path or not os.path.exists(job.output_file_path):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "no output file")
-    compressed = job.output_file_path.endswith(".zip")
     return FileResponse(
-        job.output_file_path,
+        path,
         media_type="application/zip" if compressed else "text/csv",
-        filename=download_filename(job, compressed=compressed),
+        filename=download_filename(job, kind, compressed=compressed),
     )
 
 
@@ -947,7 +1133,11 @@ async def progress(job_id: int, exp: int, sig: str) -> StreamingResponse:
             if terminal:
                 yield _sse({"type": terminal})
                 return
-            await asyncio.sleep(1)
+            # Two queries per tick, per open page. A running job needs the live
+            # feel; a queued or paused one changes at most once per worker slot,
+            # so polling it a second apart is pure load. The next tick after a
+            # status change picks up the faster cadence automatically.
+            running = (prog or {}).get("status") == "running"
+            await asyncio.sleep(_PROGRESS_POLL_RUNNING if running else _PROGRESS_POLL_IDLE)
 
     return StreamingResponse(stream(), media_type="text/event-stream")
-

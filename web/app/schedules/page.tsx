@@ -35,6 +35,7 @@ import {
   listCredentials,
   listIndexes,
   listRegions,
+  listS3Profiles,
   listSchedules,
   listTemplates,
   toggleSchedule,
@@ -71,7 +72,7 @@ export default function SchedulesPage() {
 
   return (
     <div className="mx-auto max-w-5xl animate-fade-in px-6 py-8">
-      <div className="flex items-end justify-between pb-6">
+      <div className="flex flex-wrap items-end justify-between gap-3 pb-6">
         <div className="space-y-1.5">
           <h1 className="text-xl font-semibold tracking-tight">Schedules</h1>
           <p className="text-sm text-muted-foreground">
@@ -134,6 +135,9 @@ function ScheduleRow({ s, onChange }: { s: Schedule; onChange: () => void }) {
               <Badge tone={s.enabled ? "success" : "neutral"}>{s.enabled ? "on" : "off"}</Badge>
               <Badge tone="info">{s.output_format}</Badge>
               {s.bq_config && <Badge tone="info">→ BQ</Badge>}
+              {s.s3_profile_id && (
+                <Badge tone="info">S3: {s.s3_profile_label ?? `#${s.s3_profile_id}`}</Badge>
+              )}
             </div>
             <p className="font-mono text-xs text-muted-foreground">
               every {human(s.interval_seconds)} ·{" "}
@@ -165,7 +169,9 @@ function ScheduleRow({ s, onChange }: { s: Schedule; onChange: () => void }) {
               variant="ghost"
               aria-label="Export schedule config"
               title="Export config as JSON"
-              onClick={async () => downloadJson(`${s.name || `schedule_${s.id}`}.json`, await exportSchedule(s.id))}
+              onClick={async () =>
+                downloadJson(`${s.name || `schedule_${s.id}`}.json`, await exportSchedule(s.id))
+              }
             >
               <FileDown className="h-3.5 w-3.5" />
             </Button>
@@ -268,11 +274,13 @@ function RollupForm({ s, onDone }: { s: Schedule; onDone: () => void }) {
 }
 
 function EditScheduleForm({ s, onDone }: { s: Schedule; onDone: () => void }) {
+  const { data: s3Profiles } = useQuery({ queryKey: ["s3-profiles"], queryFn: listS3Profiles });
   const [f, setF] = React.useState({
     name: s.name,
     interval_seconds: s.interval_seconds,
     lookback_seconds: s.lookback_seconds,
     calendar_day: s.calendar_day,
+    s3_profile_id: (s.s3_profile_id ?? "") as number | "",
     alert_recipients: (s.alert_recipients ?? []).join(", "),
     bq_project_id: s.bq_config?.project_id ?? "",
     bq_dataset_id: s.bq_config?.dataset_id ?? "",
@@ -287,16 +295,19 @@ function EditScheduleForm({ s, onDone }: { s: Schedule; onDone: () => void }) {
         interval_seconds: f.interval_seconds,
         lookback_seconds: f.lookback_seconds,
         calendar_day: f.calendar_day,
+        s3_profile_id: f.s3_profile_id === "" ? null : Number(f.s3_profile_id),
         alert_recipients: f.alert_recipients
           .split(/[,\s]+/)
           .map((e) => e.trim())
           .filter(Boolean),
-        bq_config: hasBqConfig ? {
-          project_id: f.bq_project_id,
-          dataset_id: f.bq_dataset_id,
-          table_id: f.bq_table_id,
-          credentials_json: f.bq_credentials_json.trim() || null,
-        } : null,
+        bq_config: hasBqConfig
+          ? {
+              project_id: f.bq_project_id,
+              dataset_id: f.bq_dataset_id,
+              table_id: f.bq_table_id,
+              credentials_json: f.bq_credentials_json.trim() || null,
+            }
+          : null,
       }),
     onSuccess: onDone,
   });
@@ -341,6 +352,23 @@ function EditScheduleForm({ s, onDone }: { s: Schedule; onDone: () => void }) {
           </select>
         )}
       </div>
+      <div className="space-y-1.5">
+        <Label>S3 destination</Label>
+        <select
+          className={fieldClass}
+          value={f.s3_profile_id}
+          onChange={(e) =>
+            setF({ ...f, s3_profile_id: e.target.value ? Number(e.target.value) : "" })
+          }
+        >
+          <option value="">No S3 upload — local download only</option>
+          {s3Profiles?.map((profile) => (
+            <option key={profile.id} value={profile.id}>
+              {profile.name} · {profile.bucket}
+            </option>
+          ))}
+        </select>
+      </div>
       <div className="space-y-1.5 sm:col-span-3">
         <Label>Alert recipients (comma or space separated)</Label>
         <Input
@@ -350,19 +378,33 @@ function EditScheduleForm({ s, onDone }: { s: Schedule; onDone: () => void }) {
         />
       </div>
       <div className="sm:col-span-3">
-        <p className="mb-2 text-xs font-medium text-muted-foreground">BigQuery destination (optional)</p>
+        <p className="mb-2 text-xs font-medium text-muted-foreground">
+          BigQuery destination (optional)
+        </p>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div className="space-y-1.5">
             <Label>GCP Project ID</Label>
-            <Input value={f.bq_project_id} onChange={(e) => setF({ ...f, bq_project_id: e.target.value })} placeholder="my-gcp-project" />
+            <Input
+              value={f.bq_project_id}
+              onChange={(e) => setF({ ...f, bq_project_id: e.target.value })}
+              placeholder="my-gcp-project"
+            />
           </div>
           <div className="space-y-1.5">
             <Label>Dataset ID</Label>
-            <Input value={f.bq_dataset_id} onChange={(e) => setF({ ...f, bq_dataset_id: e.target.value })} placeholder="logvault_data" />
+            <Input
+              value={f.bq_dataset_id}
+              onChange={(e) => setF({ ...f, bq_dataset_id: e.target.value })}
+              placeholder="logvault_data"
+            />
           </div>
           <div className="space-y-1.5">
             <Label>Table ID</Label>
-            <Input value={f.bq_table_id} onChange={(e) => setF({ ...f, bq_table_id: e.target.value })} placeholder="extractions" />
+            <Input
+              value={f.bq_table_id}
+              onChange={(e) => setF({ ...f, bq_table_id: e.target.value })}
+              placeholder="extractions"
+            />
           </div>
           <div className="space-y-1.5 sm:col-span-3">
             <Label>Service account JSON (leave blank for ADC)</Label>
@@ -379,9 +421,7 @@ function EditScheduleForm({ s, onDone }: { s: Schedule; onDone: () => void }) {
         <input
           type="checkbox"
           checked={f.calendar_day}
-          onChange={(e) =>
-            setF({ ...f, calendar_day: e.target.checked, interval_seconds: 86400 })
-          }
+          onChange={(e) => setF({ ...f, calendar_day: e.target.checked, interval_seconds: 86400 })}
         />
         Full day (00:00–23:59 UTC) instead of a rolling window
       </label>
@@ -406,7 +446,9 @@ function AddScheduleForm({ onDone }: { onDone: () => void }) {
   const { data: creds } = useQuery({ queryKey: ["credentials"], queryFn: listCredentials });
   const { data: regions } = useQuery({ queryKey: ["regions"], queryFn: listRegions });
   const { data: templates } = useQuery({ queryKey: ["templates"], queryFn: listTemplates });
+  const { data: s3Profiles } = useQuery({ queryKey: ["s3-profiles"], queryFn: listS3Profiles });
   const [templateId, setTemplateId] = React.useState<number | "">("");
+  const [s3ProfileId, setS3ProfileId] = React.useState<number | "">("");
   const [f, setF] = React.useState({
     name: "",
     credential_id: "" as number | "",
@@ -419,6 +461,8 @@ function AddScheduleForm({ onDone }: { onDone: () => void }) {
     output_format: "csv" as "csv" | "jsonl" | "bigquery",
     phrases: "",
     ids: "",
+    exclude_phrases: "",
+    exclude_exact_phrases: "",
     alert_recipients: "",
     bq_project_id: "",
     bq_dataset_id: "",
@@ -433,7 +477,10 @@ function AddScheduleForm({ onDone }: { onDone: () => void }) {
       ...prev,
       phrases: [...tpl.phrases, ...tpl.message_types].join(", "),
       ids: tpl.ids.join("\n"),
+      exclude_phrases: (tpl.exclude_phrases ?? []).join(", "),
+      exclude_exact_phrases: (tpl.exclude_exact_phrases ?? []).join(", "),
     }));
+    setS3ProfileId(tpl.s3_profile_id ?? "");
   }
 
   // A saved search is the only way to put a parse pattern on a schedule — there
@@ -449,11 +496,11 @@ function AddScheduleForm({ onDone }: { onDone: () => void }) {
   const create = useMutation({
     mutationFn: () => {
       // Use custom hours if selected, otherwise use dropdown value
-      const lookback = f.lookback_seconds === 0
-        ? Number(f.custom_lookback_hours) * 3600
-        : f.lookback_seconds;
+      const lookback =
+        f.lookback_seconds === 0 ? Number(f.custom_lookback_hours) * 3600 : f.lookback_seconds;
 
-      const bqEnabled = f.output_format === "bigquery" && f.bq_project_id && f.bq_dataset_id && f.bq_table_id;
+      const bqEnabled =
+        f.output_format === "bigquery" && f.bq_project_id && f.bq_dataset_id && f.bq_table_id;
       return createSchedule({
         name: f.name,
         credential_id: Number(f.credential_id),
@@ -473,16 +520,27 @@ function AddScheduleForm({ onDone }: { onDone: () => void }) {
           .split("\n")
           .map((i) => i.trim())
           .filter(Boolean),
+        exclude_phrases: f.exclude_phrases
+          .split(",")
+          .map((p) => p.trim())
+          .filter(Boolean),
+        exclude_exact_phrases: f.exclude_exact_phrases
+          .split(",")
+          .map((p) => p.trim())
+          .filter(Boolean),
         alert_recipients: f.alert_recipients
           .split(/[,\s]+/)
           .map((e) => e.trim())
           .filter(Boolean),
-        bq_config: bqEnabled ? {
-          project_id: f.bq_project_id,
-          dataset_id: f.bq_dataset_id,
-          table_id: f.bq_table_id,
-          credentials_json: f.bq_credentials_json.trim() || null,
-        } : null,
+        s3_profile_id: s3ProfileId === "" ? null : Number(s3ProfileId),
+        bq_config: bqEnabled
+          ? {
+              project_id: f.bq_project_id,
+              dataset_id: f.bq_dataset_id,
+              table_id: f.bq_table_id,
+              credentials_json: f.bq_credentials_json.trim() || null,
+            }
+          : null,
       });
     },
     onSuccess: () => {
@@ -510,7 +568,10 @@ function AddScheduleForm({ onDone }: { onDone: () => void }) {
             <p className="text-xs text-muted-foreground">
               Counts unique <strong>{templateAggregation.unique_fields.join(", ")}</strong>
               {templateAggregation.group_by.length > 0 && (
-                <> per <strong>{templateAggregation.group_by.join(" + ")}</strong></>
+                <>
+                  {" "}
+                  per <strong>{templateAggregation.group_by.join(" + ")}</strong>
+                </>
               )}
               , using the saved parse pattern.
             </p>
@@ -593,7 +654,7 @@ function AddScheduleForm({ onDone }: { onDone: () => void }) {
                 value={f.lookback_seconds}
                 onChange={(e) => {
                   const v = Number(e.target.value);
-                  setF({ ...f, lookback_seconds: v, custom_lookback_hours: "" })
+                  setF({ ...f, lookback_seconds: v, custom_lookback_hours: "" });
                 }}
               >
                 {LOOKBACK.map((o) => (
@@ -630,7 +691,9 @@ function AddScheduleForm({ onDone }: { onDone: () => void }) {
           <select
             className={fieldClass}
             value={f.output_format}
-            onChange={(e) => setF({ ...f, output_format: e.target.value as "csv" | "jsonl" | "bigquery" })}
+            onChange={(e) =>
+              setF({ ...f, output_format: e.target.value as "csv" | "jsonl" | "bigquery" })
+            }
           >
             <option value="csv">CSV</option>
             <option value="jsonl">JSONL</option>
@@ -670,11 +733,43 @@ function AddScheduleForm({ onDone }: { onDone: () => void }) {
             </Field>
           </>
         )}
+        <Field label="S3 destination (optional)">
+          <select
+            className={fieldClass}
+            value={s3ProfileId}
+            onChange={(e) => setS3ProfileId(e.target.value ? Number(e.target.value) : "")}
+          >
+            <option value="">No S3 upload — local download only</option>
+            {s3Profiles?.map((profile) => (
+              <option key={profile.id} value={profile.id}>
+                {profile.name} · {profile.bucket}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-muted-foreground">
+            Each day&rsquo;s completed run uploads raw, summary, and counts artifacts to this
+            bucket.
+          </p>
+        </Field>
         <Field label="Required words (comma or space separated, any order)">
           <Input
             value={f.phrases}
             onChange={(e) => setF({ ...f, phrases: e.target.value })}
             placeholder="ClassName CGetEntitlementsCommand"
+          />
+        </Field>
+        <Field label="Excluded words (comma separated)">
+          <Input
+            value={f.exclude_phrases}
+            onChange={(e) => setF({ ...f, exclude_phrases: e.target.value })}
+            placeholder="healthcheck"
+          />
+        </Field>
+        <Field label="Excluded exact phrases (comma separated)">
+          <Input
+            value={f.exclude_exact_phrases}
+            onChange={(e) => setF({ ...f, exclude_exact_phrases: e.target.value })}
+            placeholder="API : 502"
           />
         </Field>
         <Field label="Match IDs (one per line)" className="sm:col-span-2">

@@ -192,6 +192,10 @@ ok "redis responding"
 step "Environment (.env)"
 ENV_FILE="$APP_DIR/.env"
 urlsafe() { head -c "$1" /dev/urandom | base64 | tr '+/' '-_' | tr -d '= \n'; }
+# Fernet requires 32 bytes as url-safe base64 WITH padding (44 characters).
+# `urlsafe` strips the '=', which Fernet rejects — keep it for this one key.
+fernet_key() { head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '\n'; }
+valid_fernet_key() { [ "${#1}" -eq 44 ] && printf '%s' "$1" | grep -qE '^[A-Za-z0-9+/_-]{43}=$'; }
 set_env() {  # set_env KEY VALUE — safe for special characters
     if [ -f "$ENV_FILE" ] && grep -qE "^$1=" "$ENV_FILE"; then
         awk -v k="$1" -v v="$2" 'index($0,k"=")==1{print k"="v;next}{print}' "$ENV_FILE" > "$ENV_FILE.tmp"
@@ -223,8 +227,12 @@ else
     ok "existing .env kept (keys updated in place)"
 fi
 
-[ -n "$(get_env LAST9_ENCRYPTION_KEY)" ] && [ "$(get_env LAST9_ENCRYPTION_KEY)" != "replace-with-generated-fernet-key" ] \
-    || { set_env LAST9_ENCRYPTION_KEY "$(urlsafe 32)"; ok "generated LAST9_ENCRYPTION_KEY"; }
+if ! valid_fernet_key "$(get_env LAST9_ENCRYPTION_KEY)"; then
+    # An invalid key can never have encrypted anything, so replacing it loses no
+    # data. A valid key (from Fernet.generate_key) is kept across re-runs.
+    set_env LAST9_ENCRYPTION_KEY "$(fernet_key)"
+    ok "generated LAST9_ENCRYPTION_KEY"
+fi
 [ -n "$(get_env JWT_SECRET)" ] && [ "$(get_env JWT_SECRET)" != "replace-with-random-secret" ] \
     || { set_env JWT_SECRET "$(urlsafe 48)"; ok "generated JWT_SECRET"; }
 
@@ -352,7 +360,9 @@ WorkingDirectory=$APP_DIR
 EnvironmentFile=$ENV_FILE
 Environment=PYTHONPATH=$APP_DIR/worker
 Environment=PYTHONUNBUFFERED=1
-ExecStart=$APP_DIR/worker/.venv/bin/celery -A app.celery_app.celery worker -B --loglevel=INFO --concurrency=4
+ExecStart=$APP_DIR/worker/.venv/bin/celery -A app.celery_app.celery worker -B --loglevel=INFO
+# No --concurrency flag: app/celery_app.py reads WORKER_CONCURRENCY from .env,
+# which is also the number Admin → Worker capacity resizes at runtime.
 Restart=always
 RestartSec=5
 TimeoutStopSec=120
@@ -395,6 +405,47 @@ EOF
 systemctl daemon-reload
 systemctl enable --now logvault-api logvault-worker logvault-web
 ok "api, worker, web enabled and started"
+
+# ── nightly database backups ─────────────────────────────────────────────────
+step "database backup timer"
+# The Docker stack runs a `backup` service; the native install needs its own or
+# the only copy of the database is the live one. pg_dump authenticates the same
+# way the app does, through a 0600 .pgpass in the service user's home.
+printf '127.0.0.1:5432:logvault:logvault:%s\n' "$DB_PASS" > "$STATE_DIR/.pgpass"
+chown "$APP_USER:$APP_USER" "$STATE_DIR/.pgpass"
+chmod 600 "$STATE_DIR/.pgpass"
+
+cat > /etc/systemd/system/logvault-backup.service <<EOF
+[Unit]
+Description=LogVault database backup
+After=postgresql.service
+
+[Service]
+Type=oneshot
+User=$APP_USER
+Environment=PGPASSFILE=$STATE_DIR/.pgpass
+ExecStart=/bin/sh -c 'pg_dump -h 127.0.0.1 -U logvault -Fc -f "$STATE_DIR/backups/logvault-\$(date +%%Y%%m%%d-%%H%%M%%S).dump" logvault && find "$STATE_DIR/backups" -name "logvault-*.dump" -mtime +14 -delete'
+EOF
+
+cat > /etc/systemd/system/logvault-backup.timer <<EOF
+[Unit]
+Description=Nightly LogVault database backup
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=30m
+
+[Install]
+WantedBy=timers.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now logvault-backup.timer
+# Run one now: a backup that has never produced a file is not a backup.
+systemctl start logvault-backup.service \
+    || warn "first backup failed — check: journalctl -u logvault-backup"
+ok "nightly backup timer enabled (14-day retention)"
 
 # ── nginx ────────────────────────────────────────────────────────────────────
 if [ "$SKIP_NGINX" -eq 0 ]; then
@@ -508,7 +559,7 @@ echo "  Services   : systemctl status logvault-api logvault-worker logvault-web"
 echo "  Logs       : journalctl -u logvault-api -f   (also -u logvault-worker, -u logvault-web)"
 echo "  Restart    : systemctl restart logvault-api logvault-worker logvault-web"
 echo "  Data       : $STATE_DIR/exports   (zip archives)"
-echo "              $STATE_DIR/backups   (nightly pg_dump if the backup task runs)"
+echo "              $STATE_DIR/backups   (nightly pg_dump, 14-day retention)"
 echo "  Config     : $ENV_FILE   (chmod 600)"
 if [ "$EXCEL_ESCAPE" -eq 1 ]; then
     echo "  CSV values : Excel-escaped (=\"...\") — for spreadsheets, not warehouses"

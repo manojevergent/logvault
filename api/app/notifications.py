@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import smtplib
 import time
-from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 import httpx
 
@@ -164,7 +164,7 @@ def _send_slack(
 ) -> None:
     """Send Slack notification."""
     payload = {
-        "text": f"⚠️ LogVault Job Failure",
+        "text": "⚠️ LogVault Job Failure",
         "blocks": [
             {
                 "type": "section",
@@ -178,3 +178,121 @@ def _send_slack(
 
     httpx.post(cfg["slack_webhook_url"], json=payload, timeout=10)
     log.info("slack.sent", schedule=schedule_name, job_id=job_id)
+
+
+def send_health_alert(
+    *,
+    subject: str,
+    body: str,
+    slack: bool,
+    email: bool,
+    recipients: list[str],
+) -> dict[str, dict[str, object]]:
+    """Send a host-health alert to the configured channels.
+
+    Returns one entry per channel with what actually happened, so a caller can
+    report "skipped: email disabled" or the SMTP error instead of a blanket
+    success. A failing channel never stops the other one.
+    """
+    cfg = load_config()
+    result: dict[str, dict[str, object]] = {}
+
+    if not email:
+        result["email"] = {"attempted": False, "ok": False, "reason": "email channel is off"}
+    elif not recipients:
+        result["email"] = {"attempted": False, "ok": False, "reason": "no recipients"}
+    elif not (cfg["smtp_host"] and cfg["smtp_user"]):
+        result["email"] = {
+            "attempted": False,
+            "ok": False,
+            "reason": "SMTP host/user not configured",
+        }
+    else:
+        try:
+            _retry(lambda: _send_plain_email(cfg, recipients, subject, body))
+            result["email"] = {"attempted": True, "ok": True, "reason": "sent"}
+        except Exception as exc:  # noqa: BLE001
+            log.exception("email.health_error", exc_info=exc)
+            result["email"] = {"attempted": True, "ok": False, "reason": _friendly_smtp_error(exc)}
+
+    if not slack:
+        result["slack"] = {"attempted": False, "ok": False, "reason": "slack channel is off"}
+    elif not cfg["slack_webhook_url"]:
+        result["slack"] = {
+            "attempted": False,
+            "ok": False,
+            "reason": "no Slack webhook configured",
+        }
+    else:
+        try:
+            _retry(lambda: _send_slack_text(cfg["slack_webhook_url"], subject, body))
+            result["slack"] = {"attempted": True, "ok": True, "reason": "sent"}
+        except Exception as exc:  # noqa: BLE001
+            log.exception("slack.health_error", exc_info=exc)
+            result["slack"] = {"attempted": True, "ok": False, "reason": str(exc)[:300]}
+
+    return result
+
+
+def _friendly_smtp_error(exc: Exception) -> str:
+    """Name the cause a person can act on."""
+    text = str(exc)
+    if isinstance(exc, smtplib.SMTPAuthenticationError):
+        return (
+            "SMTP authentication failed — the password was rejected. Gmail and most "
+            "providers need an app-specific password, not the account password."
+        )
+    if isinstance(exc, smtplib.SMTPRecipientsRefused):
+        return f"SMTP refused the recipient(s): {text[:200]}"
+    if isinstance(exc, smtplib.SMTPSenderRefused):
+        return f"SMTP refused the sender: {text[:200]}"
+    if isinstance(exc, smtplib.SMTPConnectError):
+        return f"Could not connect to the SMTP server: {text[:200]}"
+    if isinstance(exc, TimeoutError | OSError):
+        return f"Could not reach the SMTP server: {text[:200]}"
+    return text[:300] or exc.__class__.__name__
+
+
+def _smtp_connection(cfg: dict):
+    """SMTP or SMTPS depending on the port.
+
+    Port 465 is implicit TLS and rejects the STARTTLS upgrade, which is the most
+    common reason a working account "just doesn't send".
+    """
+    host = cfg["smtp_host"]
+    port = int(cfg["smtp_port"])
+    if port == 465:
+        return smtplib.SMTP_SSL(host, port, timeout=30)
+    return smtplib.SMTP(host, port, timeout=30)
+
+
+def _send_plain_email(cfg: dict, recipients: list[str], subject: str, body: str) -> None:
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = cfg["smtp_from"]
+    msg["To"] = ", ".join(recipients)
+    msg.attach(MIMEText(body, "plain"))
+
+    server = _smtp_connection(cfg)
+    try:
+        if int(cfg["smtp_port"]) != 465:
+            server.starttls()
+        server.login(cfg["smtp_user"], cfg["smtp_password"])
+        server.sendmail(cfg["smtp_from"], recipients, msg.as_string())
+    finally:
+        server.quit()
+    log.info("email.health_sent", subject=subject, recipients=recipients)
+
+
+def _send_slack_text(webhook: str, subject: str, body: str) -> None:
+    payload = {
+        "text": subject,
+        "blocks": [
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"*{subject}*\n{body}"},
+            }
+        ],
+    }
+    httpx.post(webhook, json=payload, timeout=10)
+    log.info("slack.health_sent", subject=subject)

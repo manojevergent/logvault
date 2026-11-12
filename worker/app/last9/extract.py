@@ -34,6 +34,9 @@ class ExtractionSpec:
     # Quoted phrases the user wants adjacent, e.g. "API : 502". Sent as regexes;
     # `$contains` is word-based and would match a stray "502" anywhere.
     exact_phrases: list[str] = field(default_factory=list)
+    # Logs containing any of these are excluded ($notcontains / $notregex).
+    exclude_phrases: list[str] = field(default_factory=list)
+    exclude_exact_phrases: list[str] = field(default_factory=list)
     ids: list[str] = field(default_factory=list)
     chunk_hours: float = DEFAULT_CHUNK_HOURS
     id_batch_size: int = DEFAULT_ID_BATCH_SIZE
@@ -102,7 +105,13 @@ def iter_extraction(
 
         rows_in_chunk = 0
         for batch in batch_plan:
-            pipeline = build_filter_pipeline(spec.phrases, batch, exact_phrases=spec.exact_phrases)
+            pipeline = build_filter_pipeline(
+                spec.phrases,
+                batch,
+                exact_phrases=spec.exact_phrases,
+                exclude_phrases=spec.exclude_phrases,
+                exclude_exact_phrases=spec.exclude_exact_phrases,
+            )
             try:
                 for row in client.iter_rows(
                     index=spec.index,

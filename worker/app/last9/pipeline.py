@@ -31,6 +31,16 @@ def regex_clause(pattern: str, field: str = BODY_FIELD) -> dict[str, list[str]]:
     return {"$regex": [field, pattern]}
 
 
+def notcontains_clause(phrase: str, field: str = BODY_FIELD) -> dict[str, list[str]]:
+    """An excluded-word clause: ``{"$notcontains": ["Body", phrase]}``."""
+    return {"$notcontains": [field, phrase]}
+
+
+def notregex_clause(pattern: str, field: str = BODY_FIELD) -> dict[str, list[str]]:
+    """An excluded adjacent phrase: ``{"$notregex": ["Body", pattern]}``."""
+    return {"$notregex": [field, pattern]}
+
+
 def build_id_regex(ids: list[str]) -> str:
     """Join IDs into a single alternation pattern, each escaped (§2.6).
 
@@ -61,6 +71,8 @@ def build_filter_query(
     ids: list[str] | None = None,
     field: str = BODY_FIELD,
     exact_phrases: list[str] | None = None,
+    exclude_phrases: list[str] | None = None,
+    exclude_exact_phrases: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build the ``query`` expression for one request.
 
@@ -68,6 +80,7 @@ def build_filter_query(
     - phrases       -> one `$contains` per phrase (all must appear, any order).
     - exact_phrases -> one `$regex` per phrase (tokens must appear adjacent).
     - IDs only      -> `$and` of the single `$regex` alternation clause.
+    - exclude_*     -> `$notcontains` / `$notregex` (all must be absent).
     - any mix       -> all of the above.
 
     Even a lone clause keeps the wrapper — see the note below; a bare operator at
@@ -78,6 +91,8 @@ def build_filter_query(
     phrases = phrases or []
     ids = ids or []
     exact_phrases = exact_phrases or []
+    exclude_phrases = exclude_phrases or []
+    exclude_exact_phrases = exclude_exact_phrases or []
     if not phrases and not ids and not exact_phrases:
         raise PipelineError("a filter needs at least one phrase, exact phrase or id")
 
@@ -85,6 +100,10 @@ def build_filter_query(
     clauses += [regex_clause(exact_phrase_regex(p), field) for p in exact_phrases]
     if ids:
         clauses.append(regex_clause(build_id_regex(ids), field))
+    # Exclusions are ANDed with everything else: a row must contain none of
+    # them. (NOT A AND NOT B == NOT (A OR B).)
+    clauses += [notcontains_clause(p, field) for p in exclude_phrases]
+    clauses += [notregex_clause(exact_phrase_regex(p), field) for p in exclude_exact_phrases]
 
     # Always wrap in $and — the API requires it even for a single clause.
     # A bare operator at the query root silently returns 0 rows (§2.4).
@@ -104,6 +123,17 @@ def build_filter_pipeline(
     ids: list[str] | None = None,
     field: str = BODY_FIELD,
     exact_phrases: list[str] | None = None,
+    exclude_phrases: list[str] | None = None,
+    exclude_exact_phrases: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Convenience: build the full pipeline for one phrases/ids batch."""
-    return build_pipeline(build_filter_query(phrases, ids, field, exact_phrases))
+    return build_pipeline(
+        build_filter_query(
+            phrases,
+            ids,
+            field,
+            exact_phrases,
+            exclude_phrases,
+            exclude_exact_phrases,
+        )
+    )

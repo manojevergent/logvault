@@ -50,9 +50,12 @@ def validate_aggregation(
     raw_columns: Sequence[str] = (),
     raw_column_defaults: dict[str, str] | None = None,
     use_library: bool = False,
+    aggregate: bool = True,
 ) -> None:
     """Raises ValueError with a caller-facing message on any problem."""
-    if not unique_fields:
+    # Parse-only runs still match rows and write fields; they just have nothing
+    # to count. Only an aggregating run needs a unique field.
+    if aggregate and not unique_fields:
         raise ValueError("aggregation needs at least one field to count unique values of")
     if use_library:
         # Field names resolve against the Log Formats library at run time, not

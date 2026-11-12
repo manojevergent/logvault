@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import zipfile
+
 import pytest
 
 import app.routers.jobs as jobs_router
@@ -27,6 +29,19 @@ def _create(client, monkeypatch, **over):
     return client.post("/jobs", json=body)
 
 
+def test_create_keeps_exclusions_in_the_filter_spec(client, monkeypatch):
+    resp = _create(
+        client,
+        monkeypatch,
+        exclude_phrases=["healthcheck"],
+        exclude_exact_phrases=["API : 502"],
+    )
+    assert resp.status_code == 201, resp.text
+    spec = resp.json()["filter_spec"]
+    assert spec["exclude_phrases"] == ["healthcheck"]
+    assert spec["exclude_exact_phrases"] == ["API : 502"]
+
+
 def test_create_queues_job_and_stores_filter(client, monkeypatch):
     resp = _create(client, monkeypatch)
     assert resp.status_code == 201
@@ -36,6 +51,8 @@ def test_create_queues_job_and_stores_filter(client, monkeypatch):
         "phrases": ["GetEntitlements"],
         "ids": ["ID-A", "ID-B"],
         "exact_phrases": [],
+        "exclude_phrases": [],
+        "exclude_exact_phrases": [],
         "message_types": [],
         "label": "TEST_SEARCH",
     }
@@ -219,6 +236,53 @@ def test_signed_download_serves_completed_file(client, monkeypatch, tmp_path):
     assert client.get(signing.make_download_url(jid).replace("sig=", "sig=x")).status_code == 403
 
 
+def test_unmatched_artifact_is_exposed_and_downloadable(client, monkeypatch, tmp_path):
+    jid = _create(client, monkeypatch).json()["id"]
+    raw = tmp_path / "out.csv"
+    raw.write_text("timestamp,message\n1,matched\n", encoding="utf-8")
+    unmatched = tmp_path / "unmatched.csv"
+    unmatched.write_text("timestamp,message\n1,no match\n", encoding="utf-8")
+
+    with client.session_factory() as db:
+        job = db.get(Job, jid)
+        job.status = "completed"
+        job.output_file_path = str(raw)
+        job.unmatched_file_path = str(unmatched)
+        db.commit()
+
+    body = client.get(f"/jobs/{jid}").json()
+    assert body["has_unmatched"] is True
+    assert body["unmatched_url"]
+
+    resp = client.get(body["unmatched_url"])
+    assert resp.status_code == 200
+    assert "no match" in resp.text
+    assert "unmatched" in resp.headers["content-disposition"]
+
+    txt = client.get(f"{body['unmatched_url']}&format=txt")
+    assert txt.status_code == 200
+    assert txt.text.startswith("timestamp,message")
+
+
+def test_canceled_job_exposes_its_partial_output(client, monkeypatch, tmp_path):
+    jid = _create(client, monkeypatch).json()["id"]
+    partial = tmp_path / "partial.csv"
+    partial.write_text("timestamp,message\n1,kept before cancel\n", encoding="utf-8")
+
+    with client.session_factory() as db:
+        job = db.get(Job, jid)
+        job.status = "canceled"
+        job.output_file_path = str(partial)
+        job.rows_written = 1
+        db.commit()
+
+    body = client.get(f"/jobs/{jid}").json()
+    assert body["download_url"]
+    resp = client.get(body["download_url"])
+    assert resp.status_code == 200
+    assert "kept before cancel" in resp.text
+
+
 def test_signed_download_of_an_actually_zipped_file_keeps_the_zip_name(
     client, monkeypatch, tmp_path
 ):
@@ -257,6 +321,82 @@ def test_preview_job_download_is_not_misnamed_as_a_zip(client, monkeypatch, tmp_
     assert resp.status_code == 200
     assert ".zip" not in resp.headers["content-disposition"]
     assert resp.headers["content-type"].startswith("text/csv")
+
+
+def test_txt_download_serves_plain_csv_as_comma_separated_text(client, monkeypatch, tmp_path):
+    jid = _create(client, monkeypatch).json()["id"]
+    csv = tmp_path / "out.csv"
+    csv.write_bytes(b"timestamp,message\n1,hello,world\n")
+
+    with client.session_factory() as db:
+        job = db.get(Job, jid)
+        job.status = "completed"
+        job.output_file_path = str(csv)
+        db.commit()
+
+    url = client.get(f"/jobs/{jid}").json()["download_url"]
+    resp = client.get(f"{url}&format=txt")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/plain")
+    assert (
+        'filename="TEST_SEARCH_1_1970-01-01_0000-0159.txt"' in resp.headers["content-disposition"]
+    )
+    assert resp.text == "timestamp,message\n1,hello,world\n"
+
+
+def test_txt_download_decompresses_a_zipped_csv(client, monkeypatch, tmp_path):
+    jid = _create(client, monkeypatch).json()["id"]
+    zip_path = tmp_path / "out.csv.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("TEST_SEARCH_1.csv", "timestamp,message\n1,zipped\n")
+
+    with client.session_factory() as db:
+        job = db.get(Job, jid)
+        job.status = "completed"
+        job.output_file_path = str(zip_path)
+        db.commit()
+
+    resp = client.get(f"{client.get(f'/jobs/{jid}').json()['download_url']}&format=txt")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/plain")
+    assert resp.text == "timestamp,message\n1,zipped\n"
+
+
+def test_txt_download_of_summary_keeps_the_artifact_name(client, monkeypatch, tmp_path):
+    jid = _create(client, monkeypatch).json()["id"]
+    summary = tmp_path / "summary.csv"
+    summary.write_bytes(b"api,unique_spid\nA,3\n")
+
+    with client.session_factory() as db:
+        job = db.get(Job, jid)
+        job.status = "completed"
+        job.summary_file_path = str(summary)
+        db.commit()
+
+    url = client.get(f"/jobs/{jid}").json()["summary_url"]
+    resp = client.get(f"{url}&format=txt")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/plain")
+    assert "TEST_SEARCH_1_" in resp.headers["content-disposition"]
+    assert "_summary.txt" in resp.headers["content-disposition"]
+    assert resp.text == "api,unique_spid\nA,3\n"
+
+
+def test_txt_download_rejects_jsonl_extracts(client, monkeypatch, tmp_path):
+    jid = _create(client, monkeypatch, output_format="jsonl").json()["id"]
+    jsonl = tmp_path / "out.jsonl"
+    jsonl.write_text('{"timestamp": "1", "message": "hello"}\n', encoding="utf-8")
+
+    with client.session_factory() as db:
+        job = db.get(Job, jid)
+        job.status = "completed"
+        job.output_file_path = str(jsonl)
+        db.commit()
+
+    url = client.get(f"/jobs/{jid}").json()["download_url"]
+    resp = client.get(f"{url}&format=txt")
+    assert resp.status_code == 400
+    assert "comma-separated" in resp.json()["detail"]
 
 
 def test_retry_carries_schedule_ownership_and_rollup_marker(client, monkeypatch):

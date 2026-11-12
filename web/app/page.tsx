@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, Database, Inbox, KeyRound, ListChecks, Rows3 } from "lucide-react";
+import { ArrowRight, Database, Inbox, KeyRound, ListChecks } from "lucide-react";
 import Link from "next/link";
 import * as React from "react";
 import { Badge } from "@/components/ui/badge";
@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { IconBadge } from "@/components/ui/icon-badge";
 import { Job, JOB_TONE, JobStatus, getJobStats, listCredentials, listIndexes } from "@/lib/api";
 import { isActive, useJobs } from "@/lib/use-jobs";
+import { SystemHealthCard } from "@/components/system-health";
 import { formatRange } from "@/lib/time";
 
 const STATUS_COLOR: Record<JobStatus, string> = {
@@ -40,7 +41,6 @@ export default function DashboardPage() {
   const activeCount = stats
     ? (stats.by_status.queued ?? 0) + (stats.by_status.running ?? 0) + (stats.by_status.paused ?? 0)
     : undefined;
-  const totalRows = stats?.rows_written;
 
   const statusCounts: Record<string, number> = stats?.by_status ?? {};
   const segments = (Object.keys(statusCounts) as JobStatus[]).map((s) => ({
@@ -54,9 +54,6 @@ export default function DashboardPage() {
       <div className="flex flex-col gap-2 pb-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-lg font-semibold tracking-tight">Dashboard</h1>
-          <p className="text-xs text-muted-foreground">
-            Extract logs from Last9 into downloadable CSVs — streamed, checkpointed, resumable.
-          </p>
         </div>
         <Link href="/jobs/new">
           <Button size="sm">
@@ -66,22 +63,13 @@ export default function DashboardPage() {
         </Link>
       </div>
 
-      {/* Stat cards with 3D colored icon badges */}
-      <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-4">
-        <StatCard
-          icon={ListChecks}
-          color="blue"
-          label="Active jobs"
-          value={activeCount ?? "—"}
-        />
-        <StatCard
-          icon={Rows3}
-          color="green"
-          label="Rows extracted"
-          value={totalRows == null ? "—" : totalRows.toLocaleString()}
-        />
+      {/* Stat cards with 3D colored icon badges. auto-rows-fr keeps the health
+          card exactly the same height as its neighbours on every breakpoint. */}
+      <div className="grid auto-rows-fr grid-cols-2 gap-2.5 lg:grid-cols-4">
+        <StatCard icon={ListChecks} color="blue" label="Active jobs" value={activeCount ?? "—"} />
         <StatCard icon={Database} color="yellow" label="Saved indexes" value={indexes.length} />
         <StatCard icon={KeyRound} color="red" label="Credentials" value={creds.length} />
+        <SystemHealthCard />
       </div>
 
       {active.length > 0 && (

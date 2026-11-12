@@ -41,6 +41,37 @@ def _create(client, name="Entitlements SPID", **over):
     return client.post("/templates", json=body)
 
 
+def test_saved_search_keeps_exclusions(client):
+    resp = _create(
+        client,
+        name="Excluded search",
+        exclude_phrases=["healthcheck"],
+        exclude_exact_phrases=["API : 502"],
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["exclude_phrases"] == ["healthcheck"]
+    assert body["exclude_exact_phrases"] == ["API : 502"]
+
+
+def test_parse_only_template_round_trips_without_unique_fields(client):
+    resp = _create(
+        client,
+        name="Parse only",
+        aggregation={
+            "enabled": True,
+            "aggregate": False,
+            "regex": r"ClassName\s+(?<api>\w+)",
+            "group_by": [],
+            "unique_fields": [],
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    agg = resp.json()["aggregation"]
+    assert agg["aggregate"] is False
+    assert agg["unique_fields"] == []
+
+
 def test_exact_phrases_round_trip(client):
     resp = client.post(
         "/templates",
@@ -385,4 +416,3 @@ def test_update_can_still_change_a_hidden_field_via_a_direct_api_call(client):
         json={"name": "x", "aggregation": {**_AGG, "raw_columns": ["spid"]}},
     )
     assert resp.json()["aggregation"]["raw_columns"] == ["spid"]
-

@@ -9,6 +9,9 @@ from cryptography.fernet import Fernet
 
 # Must be set before app.config is imported (settings are cached).
 os.environ.setdefault("LAST9_ENCRYPTION_KEY", Fernet.generate_key().decode())
+# Keep the catalog empty by default so tests that count or match formats are not
+# polluted by the patterns their fixtures create. The registry tests opt in.
+os.environ.setdefault("AUTO_REGISTER_FORMATS", "false")
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

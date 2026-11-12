@@ -125,6 +125,66 @@ def test_excel_safe_neutralises_formula_triggers(value):
     assert out.endswith('"')
 
 
+LIGHTBOX_UNIFIED = (
+    r"^\s*(?:(?<trackerid>\S+)\s+-\s+)?(?<api_name>[\w.]+)\s*-*\s*"
+    r"data\s+(?:comes\s+from\s+)?request(?:\s+cp)?\s*:\s*.*?"
+    r"<channelPartnerID>(?<channelPartnerID>[^<]+)</channelPartnerID>.*?"
+    r"<sessionToken>(?<sessionToken>[^<]+)</sessionToken>"
+)
+
+
+def test_lightbox_unified_covers_standard_and_entry_time_requests(store):
+    agg = Aggregator(AggregationSpec(regex=LIGHTBOX_UNIFIED, aggregate=False), store)
+    standard = (
+        "1-6aec - getActiveSubscriptionsPostAction -- data comes from request:"
+        "<GetActiveSubscriptionRequestMessage><channelPartnerID>LIGHTBOX</channelPartnerID>"
+        "<sessionToken>MyNp-token</sessionToken></GetActiveSubscriptionRequestMessage>"
+    )
+    entry = (
+        "getAcctPairedCoupensCodesPostAction -- data request cp : "
+        "<GetAccountPairedCouponCodesRequest><channelPartnerID>LIGHTBOX</channelPartnerID>"
+        "<sessionToken>v8oG-token</sessionToken></GetAccountPairedCouponCodesRequest>"
+    )
+
+    for line, action in (
+        (standard, "getActiveSubscriptionsPostAction"),
+        (entry, "getAcctPairedCoupensCodesPostAction"),
+    ):
+        cols = agg.process(line)
+        assert cols is not None
+        values = dict(zip(agg.parsed_fields, cols, strict=True))
+        assert values["api_name"] == action
+        assert values["channelPartnerID"] == "LIGHTBOX"
+        assert values["sessionToken"]
+
+
+def test_parse_only_writes_every_named_group_and_counts_nothing(store):
+    agg = Aggregator(AggregationSpec(regex=PATTERN, aggregate=False), store)
+
+    # Every named group is a column, in regex order; no synthetic log_format for
+    # a single-pattern run.
+    assert agg.parsed_fields == ["trackerid", "api", "spid", "BU"]
+    assert agg.process(LINE) == [
+        "AHA-1-6a907c43",
+        "CGetEntitlementsCommand",
+        "2112091",
+        "AHA INDIA",
+    ]
+
+    snap = agg.snapshot()
+    assert snap["aggregate"] is False
+    assert snap["groups"] == []
+    assert snap["total_groups"] == 0
+    assert snap["rows_matched"] == 1
+    # No group rows were written to the distinct store.
+    assert list(store.iter_groups()) == []
+
+
+def test_parse_only_does_not_require_unique_fields(store):
+    # Used to raise AggregationError ("at least one field to count").
+    Aggregator(AggregationSpec(regex=PATTERN, aggregate=False), store)
+
+
 def test_columns_are_the_aggregated_fields_plus_the_matching_format(store):
     """Not every named group: with a library of hundreds of formats that would
     be hundreds of columns, and the header is written before the first row."""

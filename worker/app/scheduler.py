@@ -12,9 +12,9 @@ import os
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
-from app import db
+from app import db, s3
 from app.celery_app import celery
 from app.config import get_settings
 from app.last9 import previous_calendar_day_window, store_path
@@ -117,6 +117,17 @@ def scan_schedules() -> list[int]:
     created: list[int] = []
     with eng.begin() as conn:
         rows = conn.execute(select(db.schedules).where(db.schedules.c.enabled)).mappings().all()
+        profile_ids = {s["s3_profile_id"] for s in rows if s.get("s3_profile_id")}
+        profiles = (
+            {
+                row["id"]: dict(row)
+                for row in conn.execute(
+                    select(db.s3_profiles).where(db.s3_profiles.c.id.in_(profile_ids))
+                ).mappings()
+            }
+            if profile_ids
+            else {}
+        )
         for s in rows:
             windows = _owed_windows(s, now)
             if not windows:
@@ -142,6 +153,8 @@ def scan_schedules() -> list[int]:
                         id_batch_size=s["id_batch_size"],
                         filter_spec=filter_spec,
                         output_format=s["output_format"],
+                        s3_profile_id=s["s3_profile_id"],
+                        s3_destination=s3.destination_snapshot(profiles.get(s["s3_profile_id"])),
                         is_preview=False,
                         rows_written=0,
                         total_chunks=0,
@@ -262,6 +275,7 @@ def cleanup_exports() -> int:
                     db.jobs.c.output_file_path,
                     db.jobs.c.summary_file_path,
                     db.jobs.c.counts_file_path,
+                    db.jobs.c.unmatched_file_path,
                     db.jobs.c.finished_at,
                 ).where(
                     db.jobs.c.finished_at.is_not(None),
@@ -276,13 +290,23 @@ def cleanup_exports() -> int:
             if not fin:
                 continue
             if fin < cutoff:
-                for path_key in ("output_file_path", "summary_file_path", "counts_file_path"):
+                for path_key in (
+                    "output_file_path",
+                    "summary_file_path",
+                    "counts_file_path",
+                    "unmatched_file_path",
+                ):
                     p = j[path_key]
                     if p and os.path.exists(p):
                         with contextlib.suppress(OSError):
                             os.remove(p)
                         removed += 1
-                if j["output_file_path"] or j["summary_file_path"] or j["counts_file_path"]:
+                if (
+                    j["output_file_path"]
+                    or j["summary_file_path"]
+                    or j["counts_file_path"]
+                    or j["unmatched_file_path"]
+                ):
                     conn.execute(
                         db.jobs.update()
                         .where(db.jobs.c.id == j["id"])
@@ -290,6 +314,7 @@ def cleanup_exports() -> int:
                             output_file_path=None,
                             summary_file_path=None,
                             counts_file_path=None,
+                            unmatched_file_path=None,
                         )
                     )
                     db.add_event(conn, j["id"], "Output files expired and deleted", level="warn")
@@ -344,4 +369,23 @@ def cleanup_exports() -> int:
                     removed += 1
         except Exception:  # noqa: BLE001
             pass
+
+        # Comparison history is a convenience, not an archive: each row holds a
+        # full series plus raw provider rows. Keep the newest N per comparison
+        # (window function so it is one statement, not N deletes).
+        keep = max(1, settings.comparison_run_retention_count)
+        stale_runs = conn.execute(
+            text(
+                "DELETE FROM comparison_runs WHERE id IN ("
+                "  SELECT id FROM ("
+                "    SELECT id, row_number() OVER ("
+                "      PARTITION BY comparison_id ORDER BY id DESC"
+                "    ) AS rn FROM comparison_runs"
+                "  ) ranked WHERE rn > :keep"
+                ")"
+            ),
+            {"keep": keep},
+        ).rowcount
+        if stale_runs and stale_runs > 0:
+            removed += int(stale_runs)
     return removed

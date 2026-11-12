@@ -38,3 +38,28 @@ def count_chunks(start_epoch: int, end_epoch: int, chunk_hours: float = DEFAULT_
     """Number of chunks (for UI estimates). At 1h chunks a month is ~720 — cheap
     to just build and count."""
     return len(make_chunks(start_epoch, end_epoch, chunk_hours))
+
+
+# A preview that opens a single hour can miss a sparse stream entirely (2 rows an
+# hour means a 7-day filter looks broken). Sample a few of the newest chunks
+# instead; the row cap still bounds the work.
+PREVIEW_CHUNKS = 3
+
+
+def preview_window_start(
+    start_epoch: int,
+    end_epoch: int,
+    chunk_hours: float = DEFAULT_CHUNK_HOURS,
+    max_chunks: int = PREVIEW_CHUNKS,
+) -> int:
+    """Where a filter-test preview begins: the last few chunks of the window.
+
+    A preview runs only a slice of the selected window. The *first* chunk of a
+    long window is the oldest hour — the least useful sample, and often empty
+    even when the window is full of matching rows. The newest chunks are what
+    the operator is about to extract.
+    """
+    if chunk_hours <= 0 or end_epoch <= start_epoch:
+        return start_epoch
+    span = int(chunk_hours * 3600) * max(1, max_chunks)
+    return max(start_epoch, end_epoch - span)

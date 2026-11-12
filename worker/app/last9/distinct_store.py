@@ -124,6 +124,15 @@ class DistinctStore:
         self._pending[k] = self._pending.get(k, 0) + n
 
     def add(self, key: tuple[str, ...], field: str, value: str) -> None:
+        self.add_key_text(group_key_to_text(key), field, value)
+
+    def add_key_text(self, group_key: str, field: str, value: str) -> None:
+        """Add a value under an already-serialized group key.
+
+        The aggregator sees the same handful of group keys on every row, so
+        serializing the tuple once per group beats once per row (``json.dumps``
+        at millions of rows is measurable).
+        """
         # ponytail: buffered until the chunk boundary, so peak memory is one
         # chunk's distinct values — ~43 MB per 125k of them, worst case a
         # near-unique field like session_token. Deliberately NOT flushed on a
@@ -133,7 +142,6 @@ class DistinctStore:
         # shrinks dense chunks. If a single chunk ever does blow memory, the fix
         # is to give the store a row-position marker so a replay can skip what
         # it already counted — not to flush blindly.
-        group_key = group_key_to_text(key)
         if self._group_keys is not None:
             self._group_keys.add(group_key)
         row = (group_key, field, value)
@@ -148,10 +156,13 @@ class DistinctStore:
             return
 
         if self._buf:
+            # Generator, not a list: a near-unique field can buffer a million
+            # entries in one chunk, and materializing them again doubles the peak
+            # exactly when memory is tightest. executemany consumes any iterable.
             self._conn.executemany(
                 "INSERT INTO distinct_values (group_key, field, value, n) VALUES (?, ?, ?, ?) "
                 "ON CONFLICT(group_key, field, value) DO UPDATE SET n = n + excluded.n",
-                [(g, f, v, n) for (g, f, v), n in self._buf.items()],
+                ((g, f, v, n) for (g, f, v), n in self._buf.items()),
             )
             self._buf.clear()
         for k, n in self._pending.items():

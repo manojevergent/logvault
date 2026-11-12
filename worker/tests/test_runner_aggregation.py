@@ -4,6 +4,8 @@ checkpoint persistence, multi-field unique counts, resume)."""
 
 from __future__ import annotations
 
+import csv
+
 import app.runner as runner
 from app import crypto
 from app.last9 import Checkpoint, LogRow
@@ -102,11 +104,99 @@ def test_aggregation_result_has_multiple_unique_fields_per_group(worker_db, monk
     snap = job["aggregation_result"]
     assert snap["rows_matched"] == 4
     assert snap["rows_unmatched"] == 1
+    assert [s["message"] for s in snap["unmatched_samples"]] == ["this line matches nothing"]
+    assert snap["unmatched_sample_cap"] == 20
+
+    # The complete artifact carries every unmatched line, not just the sample.
+    assert job["unmatched_file_path"]
+    artifact = list(csv.reader(read_export(job["unmatched_file_path"])))
+    assert artifact[0] == ["timestamp", "message"]
+    assert [row[1] for row in artifact[1:]] == ["this line matches nothing"]
     groups = {tuple(g["key"].values()): g["unique_counts"] for g in snap["groups"]}
     assert groups[("CGetEntitlementsCommand", "AHA INDIA")] == {"spid": 2, "trackerid": 3}
     assert groups[("CGetEntitlementsCommand", "AHA MIDDLE EAST")] == {"spid": 1, "trackerid": 1}
     # Raw output still written alongside the aggregate summary.
     assert len(read_export(job["output_file_path"])) == 1 + len(ROWS)
+
+
+def test_parse_only_job_writes_fields_without_summary_or_counts(worker_db, monkeypatch):
+    agg = {"enabled": True, "regex": PATTERN, "aggregate": False}
+    _seed(worker_db, aggregation=agg)
+    monkeypatch.setattr(runner, "iter_extraction", _fake_iter_rows(ROWS))
+
+    runner.run_extraction(1)
+
+    with worker_db.engine().begin() as conn:
+        job = dict(worker_db.load(conn, worker_db.jobs, 1))
+    snap = job["aggregation_result"]
+    assert snap["aggregate"] is False
+    assert snap["rows_matched"] == 4
+    assert snap["rows_unmatched"] == 1
+    assert snap["groups"] == []
+    assert job["summary_file_path"] is None
+    assert job["counts_file_path"] is None
+
+    rows = read_export(job["output_file_path"])
+    parsed = list(csv.reader(rows))
+    # timestamp + every named group + the raw message (include_message defaults
+    # on; the wizard can drop it). No aggregate-only columns.
+    assert parsed[0] == ["timestamp_utc", "trackerid", "api", "spid", "BU", "message"]
+    assert len(parsed) == 1 + len(ROWS)
+    # The unmatched line still gets its row, with blank parsed fields.
+    assert parsed[-1][1:5] == ["", "", "", ""]
+    assert parsed[-1][5] == "this line matches nothing"
+
+
+def test_unmatched_samples_are_distinct_but_artifact_keeps_every_row(worker_db, monkeypatch):
+    _seed(worker_db, aggregation=AGG)
+    rows = [
+        LogRow("1", "this line matches nothing", ""),
+        LogRow("2", "this line matches nothing", ""),
+    ]
+    monkeypatch.setattr(runner, "iter_extraction", _fake_iter_rows(rows))
+
+    runner.run_extraction(1)
+
+    with worker_db.engine().begin() as conn:
+        job = dict(worker_db.load(conn, worker_db.jobs, 1))
+    assert job["aggregation_result"]["rows_unmatched"] == 2
+    # One sample slot, not the same line twice.
+    assert [s["message"] for s in job["aggregation_result"]["unmatched_samples"]] == [
+        "this line matches nothing"
+    ]
+    # The complete artifact is still every unmatched row.
+    artifact = list(csv.reader(read_export(job["unmatched_file_path"])))
+    assert len(artifact) == 3  # header + both duplicates
+
+
+def test_cancel_mid_chunk_keeps_the_partial_output(worker_db, monkeypatch):
+    _seed(worker_db, aggregation=AGG)
+    monkeypatch.setattr(runner, "STATUS_CHECK_SECONDS", 0)
+    monkeypatch.setattr(runner.db, "current_status", lambda conn, job_id: "canceled")
+    monkeypatch.setattr(runner, "iter_extraction", _fake_iter_rows(ROWS))
+
+    runner.run_extraction(1)
+
+    with worker_db.engine().begin() as conn:
+        job = dict(worker_db.load(conn, worker_db.jobs, 1))
+    assert job["status"] == "canceled"
+    # The row that was being processed is kept, and it is reflected in the job.
+    assert job["rows_written"] == 1
+    assert job["finished_at"] is not None
+    rows = read_export(job["output_file_path"])
+    assert len(rows) == 2  # header + the one written row
+
+
+def test_no_unmatched_rows_writes_no_unmatched_artifact(worker_db, monkeypatch):
+    _seed(worker_db, aggregation=AGG)
+    monkeypatch.setattr(runner, "iter_extraction", _fake_iter_rows(ROWS[:4]))
+
+    runner.run_extraction(1)
+
+    with worker_db.engine().begin() as conn:
+        job = dict(worker_db.load(conn, worker_db.jobs, 1))
+    assert job["unmatched_file_path"] is None
+    assert job["aggregation_result"]["unmatched_samples"] == []
 
 
 def test_skip_raw_output_writes_no_file_but_still_aggregates(worker_db, monkeypatch):

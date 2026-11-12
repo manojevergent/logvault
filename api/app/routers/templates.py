@@ -9,19 +9,37 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app import audit
+from app import audit, s3
 from app.aggregation import validate_aggregation
 from app.database import get_db
 from app.deps import get_current_user
-from app.models import FilterTemplate, IndexTarget, Last9Credential, User
+from app.format_registry import register_aggregation_pattern
+from app.models import FilterTemplate, IndexTarget, Last9Credential, S3Profile, User
 from app.schemas import FilterTemplateCreate, FilterTemplateOut
 
 router = APIRouter(prefix="/templates", tags=["templates"])
 
 
+def _to_out(tpl: FilterTemplate, profile_label: str | None = None) -> FilterTemplateOut:
+    out = FilterTemplateOut.model_validate(tpl)
+    out.s3_profile_label = profile_label
+    return out
+
+
 @router.get("", response_model=list[FilterTemplateOut])
-def list_templates(db: Session = Depends(get_db)) -> list[FilterTemplate]:
-    return list(db.scalars(select(FilterTemplate).order_by(FilterTemplate.name)))
+def list_templates(db: Session = Depends(get_db)) -> list[FilterTemplateOut]:
+    templates = list(db.scalars(select(FilterTemplate).order_by(FilterTemplate.name)))
+    profile_ids = {t.s3_profile_id for t in templates if t.s3_profile_id}
+    labels = (
+        dict(
+            db.execute(
+                select(S3Profile.id, S3Profile.name).where(S3Profile.id.in_(profile_ids))
+            ).all()
+        )
+        if profile_ids
+        else {}
+    )
+    return [_to_out(t, labels.get(t.s3_profile_id)) for t in templates]
 
 
 # raw_column_defaults, timestamp_column and column_labels have no control in
@@ -42,6 +60,7 @@ _HIDDEN_AGG_DEFAULTS = {
     "raw_column_defaults": {},
     "timestamp_column": "timestamp_utc",
     "column_labels": {},
+    "aggregate": True,
 }
 
 
@@ -87,6 +106,7 @@ def _build_aggregation(body: FilterTemplateCreate, prior: dict | None) -> dict |
             agg.raw_columns,
             agg.raw_column_defaults,
             agg.use_library,
+            agg.aggregate,
         )
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
@@ -106,24 +126,36 @@ def create_template(
     body: FilterTemplateCreate,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
-) -> FilterTemplate:
+) -> FilterTemplateOut:
     agg_dict = _build_aggregation(body, prior=None)
     _check_source(db, body.credential_id, body.index_target_id)
+    s3_profile = s3.profile_or_422(db, body.s3_profile_id)
     tpl = FilterTemplate(
         name=body.name,
         phrases=body.phrases,
         ids=body.ids,
         exact_phrases=body.exact_phrases,
+        exclude_phrases=body.exclude_phrases,
+        exclude_exact_phrases=body.exclude_exact_phrases,
         message_types=body.message_types,
         customer=body.customer.strip() or None,
         aggregation=agg_dict,
         credential_id=body.credential_id,
         region_code=body.region_code,
         index_target_id=body.index_target_id,
+        s3_profile_id=s3_profile.id if s3_profile else None,
     )
     db.add(tpl)
     try:
         db.flush()
+        register_aggregation_pattern(
+            db,
+            aggregation=agg_dict,
+            source_name=tpl.name,
+            source_kind="saved search",
+            source_id=tpl.id,
+            created_by=user.email,
+        )
         audit.record(
             db, "create", "filter_template", tpl.id, {"name": tpl.name}, user_id=user.email
         )
@@ -134,7 +166,7 @@ def create_template(
             status.HTTP_409_CONFLICT, "a template with this name already exists"
         ) from exc
     db.refresh(tpl)
-    return tpl
+    return _to_out(tpl, s3_profile.name if s3_profile else None)
 
 
 @router.put("/{template_id}", response_model=FilterTemplateOut)
@@ -143,24 +175,36 @@ def update_template(
     body: FilterTemplateCreate,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
-) -> FilterTemplate:
+) -> FilterTemplateOut:
     tpl = db.get(FilterTemplate, template_id)
     if tpl is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "template not found")
     agg_dict = _build_aggregation(body, prior=tpl.aggregation)
     _check_source(db, body.credential_id, body.index_target_id)
+    s3_profile = s3.profile_or_422(db, body.s3_profile_id)
     tpl.name = body.name
     tpl.phrases = body.phrases
     tpl.ids = body.ids
     tpl.exact_phrases = body.exact_phrases
+    tpl.exclude_phrases = body.exclude_phrases
+    tpl.exclude_exact_phrases = body.exclude_exact_phrases
     tpl.message_types = body.message_types
     tpl.customer = body.customer.strip() or None
     tpl.aggregation = agg_dict
     tpl.credential_id = body.credential_id
     tpl.region_code = body.region_code
     tpl.index_target_id = body.index_target_id
+    tpl.s3_profile_id = s3_profile.id if s3_profile else None
     try:
         db.flush()
+        register_aggregation_pattern(
+            db,
+            aggregation=agg_dict,
+            source_name=tpl.name,
+            source_kind="saved search",
+            source_id=tpl.id,
+            created_by=user.email,
+        )
         audit.record(
             db, "update", "filter_template", tpl.id, {"name": tpl.name}, user_id=user.email
         )
@@ -171,7 +215,7 @@ def update_template(
             status.HTTP_409_CONFLICT, "a template with this name already exists"
         ) from exc
     db.refresh(tpl)
-    return tpl
+    return _to_out(tpl, s3_profile.name if s3_profile else None)
 
 
 @router.delete("/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -186,4 +230,3 @@ def delete_template(
     db.delete(tpl)
     audit.record(db, "delete", "filter_template", template_id, user_id=user.email)
     db.commit()
-

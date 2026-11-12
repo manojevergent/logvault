@@ -103,6 +103,9 @@ class FilterTemplateCreate(BaseModel):
     ids: list[str] = []
     # Quoted phrases matched adjacently (sent as regexes); see pipeline.py.
     exact_phrases: list[str] = []
+    # Logs containing any of these are excluded ($notcontains / $notregex).
+    exclude_phrases: list[str] = []
+    exclude_exact_phrases: list[str] = []
     message_types: list[str] = []
     aggregation: AggregationSpec | None = None
     customer: str = ""
@@ -111,6 +114,8 @@ class FilterTemplateCreate(BaseModel):
     credential_id: int | None = None
     region_code: str | None = None
     index_target_id: int | None = None
+    # Optional default destination for jobs created from this search.
+    s3_profile_id: int | None = None
 
 
 class FilterTemplateOut(BaseModel):
@@ -121,14 +126,72 @@ class FilterTemplateOut(BaseModel):
     phrases: list[str]
     ids: list[str]
     exact_phrases: list[str] = []
+    exclude_phrases: list[str] = []
+    exclude_exact_phrases: list[str] = []
     message_types: list[str]
     aggregation: dict | None = None
     customer: str | None = None
     credential_id: int | None = None
     region_code: str | None = None
     index_target_id: int | None = None
+    s3_profile_id: int | None = None
+    s3_profile_label: str | None = None
     created_by: str | None
     created_at: datetime
+
+
+# ── S3 destinations ──────────────────────────────────────────────────────────
+
+
+class S3ProfileRef(BaseModel):
+    """Portable reference used by job/schedule exports."""
+
+    name: str
+
+
+class S3ProfileCreate(BaseModel):
+    name: str
+    bucket: str
+    region: str = "us-east-1"
+    prefix: str = ""
+    endpoint_url: str | None = None
+    access_key_id: str | None = None
+    secret_access_key: str | None = None
+    session_token: str | None = None
+    force_path_style: bool = False
+
+
+class S3ProfileUpdate(BaseModel):
+    name: str | None = None
+    bucket: str | None = None
+    region: str | None = None
+    prefix: str | None = None
+    endpoint_url: str | None = None
+    # Omitted/blank keeps the stored keys. Both must be supplied to replace them.
+    access_key_id: str | None = None
+    secret_access_key: str | None = None
+    session_token: str | None = None
+    # Switch to the worker's IAM role / default credential chain.
+    clear_credentials: bool = False
+    force_path_style: bool | None = None
+
+
+class S3ProfileOut(BaseModel):
+    id: int
+    name: str
+    bucket: str
+    region: str
+    prefix: str
+    endpoint_url: str | None
+    key_preview: str | None
+    force_path_style: bool
+    created_by: str | None
+    created_at: datetime
+
+
+class S3TestResult(BaseModel):
+    ok: bool
+    message: str
 
 
 # ── jobs ──────────────────────────────────────────────────────────────────────
@@ -145,6 +208,10 @@ class AggregationSpec(BaseModel):
     regex: str = ""
     group_by: list[str] = []
     unique_fields: list[str] = []
+    # False = parse only: match and write the extracted fields, but do not group
+    # or count distinct values. Default True keeps every existing job/schedule/
+    # search exactly as it was.
+    aggregate: bool = True
     skip_raw_output: bool = False
     # Try every enabled format in the Log Formats library instead of `regex`.
     use_library: bool = False
@@ -210,6 +277,63 @@ class LogFormatTestResult(BaseModel):
     fields: dict[str, str]
 
 
+# ── auto-detect ──────────────────────────────────────────────────────────────
+
+
+class LogFormatDetectRequest(BaseModel):
+    """Lines pasted from a real stream. Each is tried against every saved pattern."""
+
+    lines: list[str]
+
+
+class DetectedField(BaseModel):
+    name: str
+    # How many of the candidate's matched lines actually produced a value — a
+    # field present on 2 of 20 lines is a bad column to count on.
+    coverage: int
+    distinct: int
+    sample: str
+    # Loose heuristic from the pasted sample: low cardinality reads as a
+    # grouping key, high cardinality as something worth counting.
+    suggested: Literal["group_by", "unique", "none"] = "none"
+
+
+class DetectedCandidate(BaseModel):
+    source: Literal["library", "saved_search"]
+    id: int
+    name: str
+    regex: str
+    hint: str | None
+    priority: int
+    matched: int
+    fields: list[DetectedField]
+    suggested_group_by: list[str]
+    suggested_unique: list[str]
+
+
+class InferredPattern(BaseModel):
+    """A pattern derived from the pasted lines, not from anything saved."""
+
+    regex: str
+    fields: list[DetectedField]
+    suggested_group_by: list[str]
+    suggested_unique: list[str]
+    lines_used: int
+
+
+class LogFormatDetectResult(BaseModel):
+    lines_analyzed: int
+    matched: int
+    unmatched: int
+    candidates: list[DetectedCandidate]
+    # Keys found when a line is JSON — offered when no saved pattern fits.
+    json_fields: list[DetectedField] = []
+    # A pattern built from the pasted lines themselves, offered when nothing
+    # saved fits and the lines are not JSON.
+    inferred: InferredPattern | None = None
+    message: str | None = None
+
+
 class JobCreate(BaseModel):
     credential_id: int
     index_target_id: int
@@ -222,6 +346,8 @@ class JobCreate(BaseModel):
     ids: list[str] = []
     # Quoted phrases matched adjacently (sent as regexes); see pipeline.py.
     exact_phrases: list[str] = []
+    exclude_phrases: list[str] = []
+    exclude_exact_phrases: list[str] = []
     message_types: list[str] = []
     output_format: Literal["csv", "jsonl"] = "csv"
     is_preview: bool = False
@@ -231,6 +357,8 @@ class JobCreate(BaseModel):
     label: str = ""
     # Groups the output files into one folder per customer.
     customer: str = ""
+    # Optional S3 delivery. The worker uploads once the extraction completes.
+    s3_profile_id: int | None = None
 
 
 class JobOut(BaseModel):
@@ -271,6 +399,15 @@ class JobOut(BaseModel):
     summary_url: str | None = None
     has_counts: bool = False
     counts_url: str | None = None
+    has_unmatched: bool = False
+    unmatched_url: str | None = None
+    s3_profile_id: int | None = None
+    s3_destination: dict | None = None
+    s3_uri: str | None = None
+    s3_summary_uri: str | None = None
+    s3_counts_uri: str | None = None
+    s3_error: str | None = None
+    s3_uploaded_at: datetime | None = None
 
 
 class JobExport(BaseModel):
@@ -298,8 +435,11 @@ class JobExport(BaseModel):
     ids: list[str] = []
     # Quoted phrases matched adjacently (sent as regexes); see pipeline.py.
     exact_phrases: list[str] = []
+    exclude_phrases: list[str] = []
+    exclude_exact_phrases: list[str] = []
     message_types: list[str] = []
     aggregation: AggregationSpec | None = None
+    s3_profile: S3ProfileRef | None = None
 
 
 class BatchItem(BaseModel):
@@ -413,11 +553,14 @@ class ScheduleCreate(BaseModel):
     ids: list[str] = []
     # Quoted phrases matched adjacently (sent as regexes); see pipeline.py.
     exact_phrases: list[str] = []
+    exclude_phrases: list[str] = []
+    exclude_exact_phrases: list[str] = []
     enabled: bool = True
     aggregation: AggregationSpec | None = None
     customer: str = ""
     alert_recipients: list[str] = []
     bq_config: BQConfig | None = None
+    s3_profile_id: int | None = None
 
 
 class ScheduleUpdate(BaseModel):
@@ -427,9 +570,12 @@ class ScheduleUpdate(BaseModel):
     calendar_day: bool | None = None
     phrases: list[str] | None = None
     ids: list[str] | None = None
+    exclude_phrases: list[str] | None = None
+    exclude_exact_phrases: list[str] | None = None
     aggregation: AggregationSpec | None = None
     alert_recipients: list[str] | None = None
     bq_config: BQConfig | None = None
+    s3_profile_id: int | None = None
 
 
 class ScheduleOut(BaseModel):
@@ -450,6 +596,8 @@ class ScheduleOut(BaseModel):
     filter_spec: dict
     alert_recipients: list[str]
     bq_config: BQConfig | None = None
+    s3_profile_id: int | None = None
+    s3_profile_label: str | None = None
     last_run_at: datetime | None
     created_at: datetime
     last_run_job_id: int | None = None
@@ -475,10 +623,13 @@ class ScheduleExport(BaseModel):
     ids: list[str] = []
     # Quoted phrases matched adjacently (sent as regexes); see pipeline.py.
     exact_phrases: list[str] = []
+    exclude_phrases: list[str] = []
+    exclude_exact_phrases: list[str] = []
     customer: str = ""
     aggregation: AggregationSpec | None = None
     alert_recipients: list[str] = []
     bq_config: BQConfig | None = None
+    s3_profile: S3ProfileRef | None = None
 
 
 class SettingsOut(BaseModel):
@@ -488,3 +639,164 @@ class SettingsOut(BaseModel):
     export_retention_days: int
     download_url_ttl_seconds: int
     region_count: int
+
+
+# ── New Relic connections ─────────────────────────────────────────────────────
+
+
+class NewRelicCredentialCreate(BaseModel):
+    label: str
+    account_id: int
+    region: Literal["us", "eu"] = "us"
+    api_key: str
+
+
+class NewRelicCredentialOut(BaseModel):
+    id: int
+    label: str
+    account_id: int
+    region: str
+    api_key_preview: str
+    created_by: str | None
+    created_at: datetime
+
+
+class NewRelicCredentialUpdate(BaseModel):
+    label: str | None = None
+    account_id: int | None = None
+    region: Literal["us", "eu"] | None = None
+    # Blank/omitted keeps the stored key.
+    api_key: str | None = None
+
+
+class NewRelicTestResult(BaseModel):
+    ok: bool
+    message: str
+    account_name: str | None = None
+
+
+# ── comparisons ───────────────────────────────────────────────────────────────
+
+
+class Last9FilterSpec(BaseModel):
+    """The same phrase/ID/exact-phrase set the extraction wizard builds.
+
+    Stored next to the resolved pipeline only so the comparison editor can
+    reopen in builder mode. A hand-written pipeline has no filter_spec and
+    opens straight in JSON mode.
+    """
+
+    phrases: list[str] = []
+    ids: list[str] = []
+    exact_phrases: list[str] = []
+    message_types: list[str] = []
+
+
+class ComparisonCreate(BaseModel):
+    name: str
+    description: str = ""
+    last9_index_target_id: int
+    # Usually derived from the index target, but accepted so a source without
+    # a saved credential can still run.
+    last9_credential_id: int | None = None
+    last9_filter_spec: Last9FilterSpec | None = None
+    # When set, this is the exact pipeline that runs (filters are ignored for
+    # execution, but still stored for the editor when supplied).
+    last9_pipeline: list[dict] | None = None
+    nr_credential_id: int
+    nrql: str
+    nr_value_mode: Literal["sum", "avg", "max", "min", "last"] = "sum"
+    nr_value_field: str | None = None
+    bucket_seconds: int | None = None
+
+
+class ComparisonSummaryOut(BaseModel):
+    """List-view shape: enough to render a saved comparison without shipping
+    its (potentially very large) pipeline/NRQL to every list request."""
+
+    id: int
+    name: str
+    description: str | None
+    last9_credential_id: int
+    last9_index_target_id: int
+    last9_region_code: str
+    nr_credential_id: int
+    nr_value_mode: str
+    created_by: str | None
+    created_at: datetime
+    updated_at: datetime
+    # Join labels for the list view, resolved in the router.
+    last9_credential_label: str | None = None
+    last9_index_name: str | None = None
+    nr_credential_label: str | None = None
+    nr_account_id: int | None = None
+    last_run_at: datetime | None = None
+    last_run_id: int | None = None
+    last_run_status: str | None = None
+    last_run_last9_total: float | None = None
+    last_run_newrelic_total: float | None = None
+
+
+class ComparisonOut(ComparisonSummaryOut):
+    model_config = ConfigDict(from_attributes=True)
+
+    last9_pipeline: list
+    last9_filter_spec: dict | None
+    nrql: str
+    nr_value_field: str | None
+    bucket_seconds: int | None
+
+
+class ComparisonListOut(BaseModel):
+    items: list[ComparisonSummaryOut]
+    total: int
+    limit: int
+    offset: int
+
+
+class ComparisonPoint(BaseModel):
+    start_epoch: int
+    end_epoch: int
+    value: float
+
+
+class ComparisonSideResult(BaseModel):
+    ok: bool
+    error: str | None = None
+    elapsed_ms: int | None = None
+    total: float | None = None
+    series: list[ComparisonPoint] = []
+    raw: list[dict] = []
+    metadata: dict | None = None
+
+
+class ComparisonRunRequest(BaseModel):
+    start_epoch: int
+    end_epoch: int
+    bucket_seconds: int | None = None
+
+
+class ComparisonRunSummary(BaseModel):
+    id: int
+    comparison_id: int
+    start_epoch: int
+    end_epoch: int
+    bucket_seconds: int
+    status: str
+    last9_ok: bool
+    last9_total: float | None
+    newrelic_ok: bool
+    newrelic_total: float | None
+    created_by: str | None
+    created_at: datetime
+
+
+class ComparisonRunOut(ComparisonRunSummary):
+    last9: ComparisonSideResult
+    newrelic: ComparisonSideResult
+    nrql_effective: str | None = None
+    last9_pipeline_effective: dict | None = None
+    # last9_total - newrelic_total, and that difference as a percentage of the
+    # New Relic total. Null when either side failed or NR returned 0.
+    delta: float | None = None
+    pct_diff: float | None = None

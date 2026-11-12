@@ -17,7 +17,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from .distinct_store import DistinctStore
+from .distinct_store import DistinctStore, group_key_to_text
 from .formats import FormatMatcher, LogFormat, validate_formats
 from .patterns import AggregationError, compile_pattern, normalize_pattern
 
@@ -35,6 +35,9 @@ __all__ = [
 # breakdown goes to the summary CSV. Without a cap, a group_by on a
 # high-cardinality field (customer) would write megabytes of JSON per chunk.
 SNAPSHOT_GROUP_LIMIT = 200
+# Group keys are a handful in practice; past this many distinct keys the cache
+# stops growing (a group_by on a unique field would otherwise never hit).
+_GROUP_KEY_CACHE = 4096
 
 
 def excel_safe(value: str) -> str:
@@ -90,6 +93,9 @@ class AggregationSpec:
     regex: str = ""
     group_by: list[str] = field(default_factory=list)
     unique_fields: list[str] = field(default_factory=list)
+    # False = parse only (match + write fields, no grouping/counting). True is
+    # the behaviour every existing job, schedule and saved search expects.
+    aggregate: bool = True
     skip_raw_output: bool = False
     # Try every enabled format in the library instead of the single `regex`.
     use_library: bool = False
@@ -164,10 +170,21 @@ class Aggregator:
         # A raw_columns entry with a configured default is a deliberate
         # constant, not a field the regex is expected to define.
         checked_raw_columns = [c for c in spec.raw_columns if c not in self._raw_column_defaults]
-        validate_formats(matcher.formats, spec.group_by, spec.unique_fields, checked_raw_columns)
-        self.group_by = spec.group_by
-        self.unique_fields = spec.unique_fields
+        validate_formats(
+            matcher.formats,
+            spec.group_by if spec.aggregate else [],
+            spec.unique_fields if spec.aggregate else [],
+            checked_raw_columns,
+        )
+        self.aggregate = spec.aggregate
+        # A parse-only run keeps no grouping/counting state at all.
+        self.group_by = spec.group_by if spec.aggregate else []
+        self.unique_fields = spec.unique_fields if spec.aggregate else []
         self.store = store
+        # Group keys repeat on almost every row; the serialized form is cached
+        # per key instead of rebuilt per row. A high-cardinality group_by stops
+        # growing the cache after the cap and falls back to serializing.
+        self._key_texts: dict[tuple[str, ...], str] = {}
         self.include_message = spec.include_message
         self.timestamp_column = spec.timestamp_column
         self.excel_escape = spec.excel_escape
@@ -178,6 +195,15 @@ class Aggregator:
             # (include_log_format doesn't apply here: an explicit list already
             # omits it unless the caller named it, same as any other field.)
             self.parsed_fields: list[str] = list(self._raw_columns)
+        elif not self.aggregate:
+            # Parse only: every named group is a deliverable column, in
+            # definition order. A single regex has no use for a log_format
+            # column ("pattern"); a library run does, to say which shape matched.
+            if len(self._matcher.formats) == 1:
+                self.parsed_fields = list(self._matcher.formats[0].compiled.groupindex)
+            else:
+                fields = self._matcher.field_names_ordered()
+                self.parsed_fields = [FORMAT_COLUMN, *fields] if spec.include_log_format else fields
         else:
             # Columns for the raw export. NOT every named group across the library:
             # with hundreds of formats that would be hundreds of columns, and the
@@ -189,7 +215,11 @@ class Aggregator:
         # process() needs to know whether element 0 of the implicit column set
         # really is log_format, since that's the only element it fills from
         # hit.format_name rather than hit.fields.
-        self._leading_log_format = not self._raw_columns and spec.include_log_format
+        self._leading_log_format = (
+            not self._raw_columns
+            and spec.include_log_format
+            and (self.aggregate or len(self._matcher.formats) > 1)
+        )
         # CSV header text, parallel to parsed_fields — log_format itself is
         # never renamed (it's synthetic, not a regex field), only the fields
         # that come from spec.column_labels.
@@ -228,11 +258,17 @@ class Aggregator:
         return [excel_safe(v) for v in values] if self.excel_escape else values
 
     def _accumulate(self, hit) -> None:
-        key = tuple(hit.fields.get(f) or "" for f in self.group_by)
-        for f in self.unique_fields:
-            val = hit.fields.get(f)
-            if val:
-                self.store.add(key, f, val)
+        if self.aggregate:
+            key = tuple(hit.fields.get(f) or "" for f in self.group_by)
+            key_text = self._key_texts.get(key)
+            if key_text is None:
+                key_text = group_key_to_text(key)
+                if len(self._key_texts) < _GROUP_KEY_CACHE:
+                    self._key_texts[key] = key_text
+            for f in self.unique_fields:
+                val = hit.fields.get(f)
+                if val:
+                    self.store.add_key_text(key_text, f, val)
         self.store.bump("rows_matched")
 
     @property
@@ -262,22 +298,24 @@ class Aggregator:
         at most ``limit`` groups. The complete breakdown is the summary CSV."""
         groups = []
         truncated = False
-        for key, counts in self.store.iter_groups():
-            if len(groups) >= limit:
-                truncated = True
-                break
-            groups.append(
-                {
-                    "key": dict(zip(self.group_by, key, strict=True)),
-                    "unique_counts": {f: counts.get(f, 0) for f in self.unique_fields},
-                }
-            )
+        if self.aggregate:
+            for key, counts in self.store.iter_groups():
+                if len(groups) >= limit:
+                    truncated = True
+                    break
+                groups.append(
+                    {
+                        "key": dict(zip(self.group_by, key, strict=True)),
+                        "unique_counts": {f: counts.get(f, 0) for f in self.unique_fields},
+                    }
+                )
         return {
+            "aggregate": self.aggregate,
             "group_by": self.group_by,
             "unique_fields": self.unique_fields,
             "rows_matched": self.rows_matched,
             "rows_unmatched": self.rows_unmatched,
-            "total_groups": self.store.group_count(),
+            "total_groups": self.store.group_count() if self.aggregate else 0,
             # Which patterns actually did the work. A format stuck at zero is a
             # regex that doesn't match anything — otherwise invisible.
             "coverage": [c for c in self.coverage() if c["rows"]][:20],

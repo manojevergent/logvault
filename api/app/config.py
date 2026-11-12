@@ -66,6 +66,21 @@ class Settings(BaseSettings):
     download_url_ttl_seconds: int = 604800
     export_retention_days: int = 30
     zip_exports: bool = True
+    # A manually entered parse regex is also registered in the Log Formats
+    # library (deduped by pattern, lower priority than curated formats) so a
+    # future search/library-mode job can reuse it. Disable to keep the library
+    # curated by hand only.
+    auto_register_formats: bool = True
+
+    # Interactive Last9 vs New Relic comparisons. These run inline in the API
+    # (both are aggregate queries), so the window and HTTP timeouts are bounded
+    # rather than unbounded like a background extraction job.
+    comparison_max_window_days: int = 31
+    comparison_query_timeout_seconds: float = 60.0
+
+    # Mirrors the worker's WORKER_CONCURRENCY: the same .env value drives both,
+    # so the admin capacity card reports the number a restart would apply.
+    worker_concurrency: int = 4
 
     # Operational health (reported by /health/ops, not by /ready — a dead worker
     # or a missing backup must not pull this process out of rotation).

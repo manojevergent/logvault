@@ -1,7 +1,17 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bookmark, Calendar, Check, Loader2, Pencil, Play, PlayCircle, Trash2, X } from "lucide-react";
+import {
+  Bookmark,
+  Calendar,
+  Check,
+  Loader2,
+  Pencil,
+  Play,
+  PlayCircle,
+  Trash2,
+  X,
+} from "lucide-react";
 import { useRouter } from "next/navigation";
 import * as React from "react";
 import { Badge } from "@/components/ui/badge";
@@ -16,10 +26,15 @@ import {
   listCredentials,
   listIndexes,
   listLogFormats,
+  listS3Profiles,
   listTemplates,
   updateTemplate,
 } from "@/lib/api";
-import { OutputColumnsEditor, orderBySeq, suggestUniformLayout } from "@/components/output-columns-editor";
+import {
+  OutputColumnsEditor,
+  orderBySeq,
+  suggestUniformLayout,
+} from "@/components/output-columns-editor";
 import { extractGroupNames } from "@/lib/aggregation";
 import { PRESETS, Tz, epochToLocal, formatEpoch, localToEpoch } from "@/lib/time";
 
@@ -88,17 +103,15 @@ export default function TemplatesPage() {
           </div>
           <p className="text-sm font-medium">No saved searches yet</p>
           <p className="max-w-sm text-xs text-muted-foreground">
-            Build a filter in the New Extraction wizard, then click &ldquo;Save as search&rdquo;
-            to reuse it later.
+            Build a filter in the New Extraction wizard, then click &ldquo;Save as search&rdquo; to
+            reuse it later.
           </p>
         </div>
       )}
 
       {selection.size > 0 && (
         <div className="mb-3 flex flex-wrap items-center gap-2 border border-border bg-muted/40 px-3 py-2">
-          <span className="text-sm font-medium">
-            {selection.size} selected
-          </span>
+          <span className="text-sm font-medium">{selection.size} selected</span>
           <div className="flex-1" />
           <Button size="sm" variant="ghost" onClick={() => setSelection(new Set())}>
             Clear
@@ -137,8 +150,12 @@ export default function TemplatesPage() {
 
 function getYesterdayUtcWindow(): { start: number; end: number } {
   const now = new Date();
-  const yStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1, 0, 0, 0));
-  const yEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0));
+  const yStart = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1, 0, 0, 0)
+  );
+  const yEnd = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0)
+  );
   return {
     start: Math.floor(yStart.getTime() / 1000),
     end: Math.floor(yEnd.getTime() / 1000),
@@ -212,34 +229,47 @@ function TemplateCard({
             title="Select for batch run"
           />
           <div className="min-w-0 space-y-1.5">
-          <div className="flex items-center gap-2">
-            <span className="font-medium">{tpl.name}</span>
-            {tpl.aggregation?.enabled && <Badge tone="info">parse & aggregate</Badge>}
-            {tpl.customer ? (
-              <Badge tone="neutral">{tpl.customer}</Badge>
-            ) : (
-              // Saved before a customer was mandatory — it has to be filled in
-              // (Edit → Customer) before this search can be saved again.
-              <Badge tone="warning">no customer</Badge>
-            )}
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {[...tpl.phrases, ...tpl.message_types].map((p, i) => (
-              <Badge key={`p${i}`} tone="info">
-                {p}
-              </Badge>
-            ))}
-            {(tpl.exact_phrases ?? []).map((p, i) => (
-              <Badge key={`e${i}`} tone="info">
-                <span className="font-mono">&quot;{p}&quot;</span>
-              </Badge>
-            ))}
-            {tpl.ids.length > 0 && (
-              <Badge tone="neutral">
-                {tpl.ids.length} ID{tpl.ids.length === 1 ? "" : "s"}
-              </Badge>
-            )}
-          </div>
+            <div className="flex items-center gap-2">
+              <span className="font-medium">{tpl.name}</span>
+              {tpl.aggregation?.enabled && <Badge tone="info">parse & aggregate</Badge>}
+              {tpl.s3_profile_id && (
+                <Badge tone="info">S3: {tpl.s3_profile_label ?? `#${tpl.s3_profile_id}`}</Badge>
+              )}
+              {tpl.customer ? (
+                <Badge tone="neutral">{tpl.customer}</Badge>
+              ) : (
+                // Saved before a customer was mandatory — it has to be filled in
+                // (Edit → Customer) before this search can be saved again.
+                <Badge tone="warning">no customer</Badge>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {[...tpl.phrases, ...tpl.message_types].map((p, i) => (
+                <Badge key={`p${i}`} tone="info">
+                  {p}
+                </Badge>
+              ))}
+              {(tpl.exact_phrases ?? []).map((p, i) => (
+                <Badge key={`e${i}`} tone="info">
+                  <span className="font-mono">&quot;{p}&quot;</span>
+                </Badge>
+              ))}
+              {(tpl.exclude_phrases ?? []).map((p, i) => (
+                <Badge key={`x${i}`} tone="danger">
+                  NOT {p}
+                </Badge>
+              ))}
+              {(tpl.exclude_exact_phrases ?? []).map((p, i) => (
+                <Badge key={`xe${i}`} tone="danger">
+                  <span className="font-mono">NOT &quot;{p}&quot;</span>
+                </Badge>
+              ))}
+              {tpl.ids.length > 0 && (
+                <Badge tone="neutral">
+                  {tpl.ids.length} ID{tpl.ids.length === 1 ? "" : "s"}
+                </Badge>
+              )}
+            </div>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
@@ -339,6 +369,10 @@ function TemplateEditForm({
   const [phrasesText, setPhrasesText] = React.useState(tpl.phrases.join(", "));
   const [idsText, setIdsText] = React.useState(tpl.ids.join(", "));
   const [exactText, setExactText] = React.useState((tpl.exact_phrases ?? []).join(", "));
+  const [excludeText, setExcludeText] = React.useState((tpl.exclude_phrases ?? []).join(", "));
+  const [excludeExactText, setExcludeExactText] = React.useState(
+    (tpl.exclude_exact_phrases ?? []).join(", ")
+  );
   const [messageTypesText, setMessageTypesText] = React.useState(tpl.message_types.join(", "));
 
   const [aggEnabled, setAggEnabled] = React.useState(agg?.enabled ?? false);
@@ -354,9 +388,9 @@ function TemplateEditForm({
   // unique_fields. Seeded from whatever this template already has saved, so
   // reopening Edit shows the choice it was last saved with rather than
   // "nothing excluded" while a different set sits in the database.
-  const [includedFieldsOverride, setIncludedFieldsOverride] = React.useState<Set<
-    string
-  > | null>(agg?.raw_columns && agg.raw_columns.length > 0 ? new Set(agg.raw_columns) : null);
+  const [includedFieldsOverride, setIncludedFieldsOverride] = React.useState<Set<string> | null>(
+    agg?.raw_columns && agg.raw_columns.length > 0 ? new Set(agg.raw_columns) : null
+  );
   const [colSeq, setColSeq] = React.useState<Record<string, number>>(() => {
     const seq: Record<string, number> = {};
     (agg?.raw_columns ?? []).forEach((f, i) => {
@@ -382,14 +416,21 @@ function TemplateEditForm({
   );
   // Remembered source: pre-fills batch runs and the wizard. Blank = no
   // default (source picked at run time, as before).
-  const { data: allIndexes } = useQuery({ queryKey: ["indexes", ""], queryFn: () => listIndexes() });
+  const { data: allIndexes } = useQuery({
+    queryKey: ["indexes", ""],
+    queryFn: () => listIndexes(),
+  });
   const { data: credentials } = useQuery({ queryKey: ["credentials"], queryFn: listCredentials });
+  const { data: s3Profiles } = useQuery({ queryKey: ["s3-profiles"], queryFn: listS3Profiles });
   const [sourceIdx, setSourceIdx] = React.useState<number | "">(tpl.index_target_id ?? "");
   const [sourceCred, setSourceCred] = React.useState<number | "">(tpl.credential_id ?? "");
+  const [s3ProfileId, setS3ProfileId] = React.useState<number | "">(tpl.s3_profile_id ?? "");
   const sourceTarget = allIndexes?.find((i) => i.id === sourceIdx);
   const resolvedSource = {
     credential_id:
-      sourceCred === "" || sourceCred == null ? sourceTarget?.credential_id ?? null : Number(sourceCred),
+      sourceCred === "" || sourceCred == null
+        ? (sourceTarget?.credential_id ?? null)
+        : Number(sourceCred),
     region_code: sourceTarget?.region_code ?? tpl.region_code ?? null,
     index_target_id: sourceIdx === "" ? null : Number(sourceIdx),
   };
@@ -489,11 +530,14 @@ function TemplateEditForm({
         phrases: splitCsv(phrasesText),
         ids: splitCsv(idsText),
         exact_phrases: splitCsv(exactText),
+        exclude_phrases: splitCsv(excludeText),
+        exclude_exact_phrases: splitCsv(excludeExactText),
         message_types: splitCsv(messageTypesText),
         customer: customer.trim(),
         credential_id: resolvedSource.credential_id,
         region_code: resolvedSource.region_code,
         index_target_id: resolvedSource.index_target_id,
+        s3_profile_id: s3ProfileId === "" ? null : Number(s3ProfileId),
         aggregation: aggEnabled
           ? {
               enabled: true,
@@ -576,6 +620,24 @@ function TemplateEditForm({
               </select>
             </Field>
           )}
+          <Field label="Default S3 destination (optional)">
+            <select
+              className={fieldClass}
+              value={s3ProfileId}
+              onChange={(e) => setS3ProfileId(e.target.value ? Number(e.target.value) : "")}
+            >
+              <option value="">No S3 upload — local download only</option>
+              {s3Profiles?.map((profile) => (
+                <option key={profile.id} value={profile.id}>
+                  {profile.name} · {profile.bucket}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-muted-foreground">
+              Used by jobs and schedules created from this search. Existing jobs keep their
+              snapshotted destination.
+            </p>
+          </Field>
           <Field label="Phrases (comma-separated)" className="sm:col-span-2">
             <Input value={phrasesText} onChange={(e) => setPhrasesText(e.target.value)} />
           </Field>
@@ -589,6 +651,28 @@ function TemplateEditForm({
               These tokens must appear <strong>adjacent</strong> (matched as a regex). Use this
               instead of loose words when a number also occurs elsewhere in the line, e.g. in a
               timestamp.
+            </p>
+          </Field>
+          <Field label="Excluded phrases (comma-separated)" className="sm:col-span-2">
+            <Input
+              value={excludeText}
+              onChange={(e) => setExcludeText(e.target.value)}
+              placeholder="healthcheck"
+            />
+            <p className="text-xs text-muted-foreground">
+              A log containing any of these is excluded (Last9{" "}
+              <span className="font-mono">$notcontains</span>).
+            </p>
+          </Field>
+          <Field label="Excluded exact phrases (comma-separated)" className="sm:col-span-2">
+            <Input
+              value={excludeExactText}
+              onChange={(e) => setExcludeExactText(e.target.value)}
+              placeholder="API : 502"
+            />
+            <p className="text-xs text-muted-foreground">
+              Excluded only when these tokens are <strong>adjacent</strong> (
+              <span className="font-mono">$notregex</span>).
             </p>
           </Field>
           <Field label="IDs (comma-separated)" className="sm:col-span-2">
@@ -611,8 +695,8 @@ function TemplateEditForm({
           </label>
           {!aggEnabled && (
             <p className="mt-1 text-xs text-muted-foreground">
-              Left off: the raw export is exactly <span className="font-mono">timestamp_utc</span>{" "}
-              + <span className="font-mono">message</span> — no parsing, nothing else added.
+              Left off: the raw export is exactly <span className="font-mono">timestamp_utc</span> +{" "}
+              <span className="font-mono">message</span> — no parsing, nothing else added.
             </p>
           )}
 
@@ -852,7 +936,9 @@ function BatchDialog({
   // saving one. Rows without a remembered source still ask, as before.
   const [indexByTpl, setIndexByTpl] = React.useState<Record<number, number | "">>(() =>
     Object.fromEntries(
-      templates.filter((t) => t.index_target_id != null).map((t) => [t.id, t.index_target_id as number])
+      templates
+        .filter((t) => t.index_target_id != null)
+        .map((t) => [t.id, t.index_target_id as number])
     )
   );
   const [credByTpl, setCredByTpl] = React.useState<Record<number, number | "">>(() =>
@@ -863,7 +949,10 @@ function BatchDialog({
   const [bulkIndex, setBulkIndex] = React.useState<number | "">("");
   const [created, setCreated] = React.useState<Job[] | null>(null);
 
-  const { data: allIndexes } = useQuery({ queryKey: ["indexes", ""], queryFn: () => listIndexes() });
+  const { data: allIndexes } = useQuery({
+    queryKey: ["indexes", ""],
+    queryFn: () => listIndexes(),
+  });
   const { data: credentials } = useQuery({ queryKey: ["credentials"], queryFn: listCredentials });
 
   const { start, end } =
@@ -927,8 +1016,8 @@ function BatchDialog({
           {created ? (
             <div className="space-y-2">
               <p className="text-sm text-success">
-                {created.length} job{created.length === 1 ? "" : "s"} queued — files will be
-                named <span className="font-mono">&lt;search&gt;_&lt;job id&gt;_&lt;window&gt;</span>.
+                {created.length} job{created.length === 1 ? "" : "s"} queued — files will be named{" "}
+                <span className="font-mono">&lt;search&gt;_&lt;job id&gt;_&lt;window&gt;</span>.
               </p>
               <div className="space-y-1">
                 {created.map((j) => (
@@ -938,7 +1027,10 @@ function BatchDialog({
                     className="block border border-border px-3 py-1.5 text-sm hover:border-primary"
                   >
                     <span className="font-medium">{j.filter_spec.label}</span>
-                    <span className="text-muted-foreground"> · job #{j.id} · {j.status}</span>
+                    <span className="text-muted-foreground">
+                      {" "}
+                      · job #{j.id} · {j.status}
+                    </span>
                   </a>
                 ))}
               </div>
@@ -1012,7 +1104,9 @@ function BatchDialog({
                 ) : null}
                 <p className="font-mono text-xs text-muted-foreground">
                   {validRange ? (
-                    <>Resolved: {formatEpoch(start)} → {formatEpoch(end)} UTC</>
+                    <>
+                      Resolved: {formatEpoch(start)} → {formatEpoch(end)} UTC
+                    </>
                   ) : (
                     <span className="text-danger">End must be after start.</span>
                   )}
@@ -1052,7 +1146,7 @@ function BatchDialog({
                       onChange={(e) => setPreview(e.target.checked)}
                       className="h-4 w-4"
                     />
-                    Preview only (first chunk, 100 rows each)
+                    Preview only (newest chunks, 100 rows each)
                   </label>
                 </div>
 
@@ -1119,9 +1213,7 @@ function BatchDialog({
                 </div>
               </div>
 
-              {run.isError && (
-                <p className="text-xs text-danger">{(run.error as Error).message}</p>
-              )}
+              {run.isError && <p className="text-xs text-danger">{(run.error as Error).message}</p>}
               <div className="flex justify-end gap-2">
                 <Button size="sm" variant="ghost" onClick={onClose}>
                   Cancel
@@ -1147,4 +1239,3 @@ function BatchDialog({
     </div>
   );
 }
-

@@ -42,6 +42,13 @@ def test_common_group_names_are_what_let_formats_aggregate_together():
     assert set(m.field_names()) == {"cpid", "partner"}
 
 
+def test_field_names_ordered_is_stable_and_deduped():
+    """The parse-only header needs a fixed order — a set would vary by hash seed."""
+    extra = LogFormat(name="extra", regex=r"(?<api>\w+)\s+(?<cpid>\S+)")
+    m = FormatMatcher([ABSCBN, AHA, extra])
+    assert m.field_names_ordered() == ["cpid", "partner", "api"]
+
+
 def test_a_line_matching_nothing_is_reported_not_guessed():
     m = FormatMatcher([AHA, ABSCBN])
     assert m.match("some unrelated line") is None

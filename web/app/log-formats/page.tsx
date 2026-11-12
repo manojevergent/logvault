@@ -64,7 +64,7 @@ export default function LogFormatsPage() {
 
   return (
     <div className="mx-auto max-w-5xl animate-fade-in px-6 py-8">
-      <div className="flex items-end justify-between pb-6">
+      <div className="flex flex-wrap items-end justify-between gap-3 pb-6">
         <div className="space-y-1.5">
           <h1 className="text-xl font-semibold tracking-tight">Log formats</h1>
           <p className="text-sm text-muted-foreground">

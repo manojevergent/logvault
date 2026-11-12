@@ -420,6 +420,53 @@ def test_a_plain_non_json_line_is_returned_unchanged():
     assert _extract_message("just a log line") == "just a log line"
 
 
+# A real multi-line record: timestamp/blank line, a (broken) JSON envelope with
+# unescaped redaction quotes, then a trace line. The whole block used to reach
+# the parse pattern, so an anchored regex could never match the inner request.
+_MULTILINE_STANDARD = (
+    "2026-11-05 18:08:00:630 UTC\n\n"
+    '{"level":"TRACK","timestamp":"2026-11-05 18:07:55:102 UTC",'
+    '"thread":"WorkerThread1","class":"Logger","message":"'
+    "1-6aecc5fb-374d56d06974b82b543bc94c - getActiveSubscriptionsPostAction -- "
+    "data comes from request:<GetActiveSubscriptionRequestMessage><returnTVOD>F</returnTVOD>"
+    "<channelPartnerID>LIGHTBOX</channelPartnerID>"
+    "<sessionToken>MyNp-pvSM-xAaQ-HDpC-o7xw-YVB3-Yr</sessionToken>"
+    'apiPassword="***REDACTED***"<apiUser>lightboxapiuser</apiUser>'
+    '</GetActiveSubscriptionRequestMessage>"}\n'
+    "User BU Query time: 0 ms"
+)
+
+# Entry-time trace: the JSON message is only a marker; the actual request is the
+# line after the envelope, using "data request cp :" instead of "data comes from
+# request:".
+_MULTILINE_ENTRY = (
+    "2026-11-05 19:22:10:625 UTC\n\n"
+    '{"level":"TRACK","timestamp":"2026-11-05 19:22:07:189 UTC",'
+    '"thread":"WorkerThread20","message":'
+    '"[getAcctPairedCoupensCodesPostAction entry time] 1793906527189"}\n'
+    "data request cp : <GetAccountPairedCouponCodesRequest>"
+    "<channelPartnerID>LIGHTBOX</channelPartnerID>"
+    "<sessionToken>v8oG-Cocl-EIXN-veD3-T2T0-vucX-T3</sessionToken>"
+    'apiPassword="***REDACTED***"<apiUser>neoniframeuser</apiUser>'
+    "</GetAccountPairedCouponCodesRequest>\n"
+    "unmarshell request : null"
+)
+
+
+def test_a_multiline_standard_request_is_unwrapped():
+    out = _extract_message(_MULTILINE_STANDARD)
+    assert out.startswith("1-6aecc5fb-")
+    assert "<channelPartnerID>LIGHTBOX" in out
+    assert '"level"' not in out
+
+
+def test_a_multiline_entry_time_trace_joins_the_request_line():
+    out = _extract_message(_MULTILINE_ENTRY)
+    assert out.startswith("getAcctPairedCoupensCodesPostAction -- data request cp :")
+    assert "<sessionToken>v8oG-Cocl" in out
+    assert '"level"' not in out
+
+
 def test_a_broken_line_that_is_not_an_envelope_is_returned_unchanged():
     assert _extract_message("not json {but has a brace") == "not json {but has a brace"
 

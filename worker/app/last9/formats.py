@@ -77,6 +77,19 @@ class FormatMatcher:
             names.update(f.compiled.groupindex)
         return names
 
+    def field_names_ordered(self) -> list[str]:
+        """Every named group, deduped in format-priority then definition order.
+
+        The parse-only CSV needs a fixed header before the first row arrives;
+        a set would make that column order depend on hash seeds.
+        """
+        names: list[str] = []
+        for f in self._formats:
+            for name in f.compiled.groupindex:
+                if name not in names:
+                    names.append(name)
+        return names
+
     def match(self, message: str) -> FormatMatch | None:
         if message in self._cache:
             hit = self._cache[message]

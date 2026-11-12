@@ -16,3 +16,4 @@ structlog==24.4.0
 # Pinned: kombu 5.7 requires redis-py >= 6.1, but this app pins redis 5.2.1.
 kombu==5.4.2
 
+boto3==1.35.36

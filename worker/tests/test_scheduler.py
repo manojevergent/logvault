@@ -210,6 +210,47 @@ def test_cleanup_removes_expired_exports(worker_db, tmp_path):
     assert job["output_file_path"] is None
 
 
+def test_cleanup_prunes_comparison_run_history(worker_db, monkeypatch):
+    """Each run stores a full series plus raw rows. Only the newest N per
+    comparison are kept, so the table cannot grow without bound."""
+    from app.config import get_settings
+
+    keep = get_settings().comparison_run_retention_count
+    with worker_db.engine().begin() as conn:
+        for comparison_id in (1, 2):
+            for n in range(keep + 5):
+                conn.execute(
+                    worker_db.comparison_runs.insert().values(
+                        id=comparison_id * 1000 + n,
+                        comparison_id=comparison_id,
+                        created_at=datetime.now(UTC),
+                    )
+                )
+
+    scheduler.cleanup_exports()
+
+    with worker_db.engine().begin() as conn:
+        rows = (
+            conn.execute(
+                worker_db.comparison_runs.select().order_by(
+                    worker_db.comparison_runs.c.comparison_id,
+                    worker_db.comparison_runs.c.id,
+                )
+            )
+            .mappings()
+            .all()
+        )
+
+    per_comparison: dict[int, list[int]] = {}
+    for row in rows:
+        per_comparison.setdefault(row["comparison_id"], []).append(row["id"])
+    assert sorted(per_comparison) == [1, 2]
+    for ids in per_comparison.values():
+        assert len(ids) == keep
+        # The survivors are the newest, not the oldest.
+        assert ids[-1] % 1000 == keep + 4
+
+
 def _running_job(wdb, job_id: int, *, started_at, last_event_at=None, created_by=None) -> None:
     with wdb.engine().begin() as conn:
         conn.execute(

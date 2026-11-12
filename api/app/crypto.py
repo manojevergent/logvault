@@ -18,6 +18,20 @@ def _fernet() -> Fernet:
     return Fernet(get_settings().last9_encryption_key.encode())
 
 
+def key_is_valid(key: str) -> bool:
+    """True when ``key`` is a Fernet key: 32 bytes, url-safe base64, padded.
+
+    Fernet rejects unpadded base64, which is exactly what a "strip the ="
+    secret generator produces. Checked at startup so a bad key fails loudly
+    instead of at the first credential save.
+    """
+    try:
+        Fernet(key.encode())
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
 def encrypt(plaintext: str) -> str:
     return _fernet().encrypt(plaintext.encode()).decode()
 
