@@ -91,7 +91,14 @@ export function useTz(): [Tz, (t: Tz) => void] {
 }
 
 export const PRESETS: { label: string; seconds: number }[] = [
+  { label: "Last 5m", seconds: 5 * 60 },
+  { label: "Last 10m", seconds: 10 * 60 },
+  { label: "Last 30m", seconds: 30 * 60 },
+  { label: "Last 45m", seconds: 45 * 60 },
   { label: "Last 1h", seconds: 3600 },
+  { label: "Last 2h", seconds: 2 * 3600 },
+  { label: "Last 3h", seconds: 3 * 3600 },
+  { label: "Last 5h", seconds: 5 * 3600 },
   { label: "Last 6h", seconds: 6 * 3600 },
   { label: "Last 24h", seconds: 24 * 3600 },
   { label: "Last 7d", seconds: 7 * 24 * 3600 },
