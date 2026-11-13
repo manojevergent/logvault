@@ -1420,12 +1420,14 @@ export default function NewJobPage() {
           </div>
           {!aggEnabled && (
             <p className="text-xs text-muted-foreground sm:col-span-2">
-              Left off: the raw export is exactly <span className="font-mono">timestamp_utc</span> +{" "}
-              <span className="font-mono">message</span> — no parsing, nothing else added.
+              Parsing is off — the raw export is exactly{" "}
+              <span className="font-mono">timestamp_utc</span> +{" "}
+              <span className="font-mono">message</span>. These settings are kept and apply as soon
+              as you turn parsing on.
             </p>
           )}
 
-          {aggEnabled && (
+          <fieldset disabled={!aggEnabled} className="contents">
             <>
               <AutoDetectPanel onApply={applyAutoDetect} />
 
@@ -1742,7 +1744,7 @@ export default function NewJobPage() {
                 </div>
               )}
             </>
-          )}
+          </fieldset>
         </Section>
 
         {/* 5. Options */}
