@@ -702,6 +702,14 @@ export default function JobDetailPage() {
               {pct}%
             </span>
           </div>
+          {status === "completed" && rows === 0 && (
+            <p className="border border-warning/40 bg-warning/10 px-2 py-1.5 text-xs">
+              <strong>No rows matched.</strong> The run finished, but Last9 returned nothing for
+              this window and filter. The usual cause is the source&apos;s index differing from
+              where these logs live (for example Singapore_default vs UMS_singapore); a required
+              word, message type or NOT phrase can also be too strict.
+            </p>
+          )}
           {job.error_message && (
             <div className="space-y-0.5">
               <p className="font-mono text-xs text-danger">

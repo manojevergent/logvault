@@ -263,6 +263,10 @@ export default function NewJobPage() {
 
   function applyTemplate(tpl: FilterTemplate) {
     setSearchLabel(tpl.name);
+    // The customer is part of the search: it names the export folder and is
+    // required to save again. Not restoring it made a saved search look like it
+    // had forgotten the customer.
+    setCustomer(tpl.customer ?? "");
     setPhrases(tpl.phrases);
     setExactPhrases(tpl.exact_phrases ?? []);
     setExcludePhrases(tpl.exclude_phrases ?? []);
@@ -271,6 +275,17 @@ export default function NewJobPage() {
     setIdsText(tpl.ids.join("\n"));
     setMessageTypesText(tpl.message_types.join("\n"));
     setS3ProfileId(tpl.s3_profile_id ?? "");
+    // A saved search is a complete recipe, including the index it was built on.
+    // Leaving whatever source was already selected queried a different index
+    // and silently returned zero rows.
+    if (tpl.index_target_id != null) {
+      const savedSource = allIndexes?.find((i) => i.id === tpl.index_target_id);
+      if (savedSource) {
+        setIndexId(savedSource.id);
+        setRegion(savedSource.region_code);
+        if (savedSource.credential_id) setCredentialId(savedSource.credential_id);
+      }
+    }
     // The regex is the laborious part of a search, so a saved one comes back
     // with it. A template without a parse config just switches the section off
     // rather than wiping whatever is typed there.
@@ -927,6 +942,21 @@ export default function NewJobPage() {
       ? "Local download"
       : (s3Profiles?.find((p) => p.id === s3ProfileId)?.name ?? "S3");
 
+  // The source a loaded search was built on. Loading applies it automatically;
+  // if the source is changed afterwards, both Filter and Review warn, because a
+  // different index silently returns zero rows rather than an error.
+  const loadedTemplate = templates?.find((t) => t.id === templateId);
+  const savedTemplateSource = allIndexes?.find((i) => i.id === loadedTemplate?.index_target_id);
+  const sourceMismatch =
+    indexId !== "" && savedTemplateSource != null && savedTemplateSource.id !== indexId;
+
+  function useSavedSource() {
+    if (!savedTemplateSource) return;
+    setIndexId(savedTemplateSource.id);
+    setRegion(savedTemplateSource.region_code);
+    if (savedTemplateSource.credential_id) setCredentialId(savedTemplateSource.credential_id);
+  }
+
   const positiveCount =
     effectivePhrases.length + effectiveExact.length + ids.length + messageTypes.length;
   const exclusionCount = effectiveExclude.length + effectiveExcludeExact.length;
@@ -1440,7 +1470,10 @@ export default function NewJobPage() {
                   )}
                 </div>
                 {hasSomethingToSave && !savingTemplate && (
-                  <p className="text-xs text-muted-foreground">Saves {savedParts.join(" + ")}.</p>
+                  <p className="text-xs text-muted-foreground">
+                    Saves {savedParts.join(" + ")}
+                    {customer.trim() ? ` for customer ${customer.trim()}` : ""}.
+                  </p>
                 )}
                 {saveTemplate.isError &&
                   !saveConflict &&
@@ -1448,6 +1481,53 @@ export default function NewJobPage() {
                     <p className="text-xs text-danger">{(saveTemplate.error as Error).message}</p>
                   )}
               </div>
+
+              {saveTemplate.isSuccess && !savingTemplate && (
+                <p className="text-xs text-success sm:col-span-2">
+                  Saved as search &ldquo;{searchLabel}&rdquo;
+                  {customer.trim() ? ` · customer ${customer.trim()}` : ""}.
+                </p>
+              )}
+
+              {sourceMismatch && (
+                <div className="border border-warning/40 bg-warning/10 p-3 text-xs sm:col-span-2">
+                  <p>
+                    <strong>{loadedTemplate?.name}</strong> was built on{" "}
+                    <strong>
+                      {savedTemplateSource?.name} · {savedTemplateSource?.region_code}
+                    </strong>
+                    , but the current source is{" "}
+                    <strong>{selectedIndex?.name ?? "not chosen"}</strong>. A different index can
+                    match nothing and still finish successfully.
+                  </p>
+                  <button
+                    type="button"
+                    className="mt-1 text-primary underline"
+                    onClick={useSavedSource}
+                  >
+                    Use the search&apos;s source
+                  </button>
+                </div>
+              )}
+
+              {loadedTemplate?.index_target_id != null &&
+                savedTemplateSource &&
+                !sourceMismatch && (
+                  <p className="text-xs text-muted-foreground sm:col-span-2">
+                    Running against this search&apos;s saved source:{" "}
+                    <strong>
+                      {savedTemplateSource.name} · {savedTemplateSource.region_code}
+                    </strong>
+                    .{" "}
+                    <button
+                      type="button"
+                      className="text-primary underline"
+                      onClick={() => goToStep(1)}
+                    >
+                      Change
+                    </button>
+                  </p>
+                )}
 
               {saveConflict && (
                 <div
@@ -2113,6 +2193,26 @@ export default function NewJobPage() {
                 Everything checks out. Test the filter on a small sample first, or run the full
                 window.
               </p>
+            )}
+
+            {sourceMismatch && (
+              <div className="border border-warning/40 bg-warning/10 p-3 text-xs">
+                <p>
+                  Running against <strong>{selectedIndex?.name}</strong>, but{" "}
+                  <strong>{loadedTemplate?.name}</strong> was built on{" "}
+                  <strong>
+                    {savedTemplateSource?.name} · {savedTemplateSource?.region_code}
+                  </strong>
+                  . This can return no rows.
+                </p>
+                <button
+                  type="button"
+                  className="mt-1 text-primary underline"
+                  onClick={useSavedSource}
+                >
+                  Use the search&apos;s source
+                </button>
+              </div>
             )}
 
             <div className="grid gap-3 sm:grid-cols-2">
