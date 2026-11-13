@@ -6,7 +6,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class BQConfig(BaseModel):
@@ -800,3 +800,100 @@ class ComparisonRunOut(ComparisonRunSummary):
     # New Relic total. Null when either side failed or NR returned 0.
     delta: float | None = None
     pct_diff: float | None = None
+
+# ---- Reporting -------------------------------------------------------------
+# Scheduled-run reporting. Counts come from jobs the scheduler created
+# (`created_by = "schedule:<id>"`), grouped by the UTC day the run started.
+
+ReportDayStatus = Literal[
+    "ok", "failed", "running", "canceled", "partial", "missed", "pending", "off", "none"
+]
+
+
+class ReportSettingsOut(BaseModel):
+    retention_days: int
+    updated_at: datetime | None = None
+    updated_by: str | None = None
+
+
+class ReportSettingsUpdate(BaseModel):
+    retention_days: int = Field(ge=1, le=365)
+
+
+class ReportDayOut(BaseModel):
+    date: str  # YYYY-MM-DD
+    status: ReportDayStatus
+    rows: int
+    runs: int
+    completed: int
+    failed: int
+
+
+class ReportTotalsOut(BaseModel):
+    customers: int
+    schedules: int
+    enabled_schedules: int
+    runs_today: int
+    completed_today: int
+    failed_today: int
+    active_today: int
+    rows_today: int
+    rows_yesterday: int
+    rows_last_week: int
+    pct_vs_yesterday: float | None
+    pct_vs_last_week: float | None
+    success_rate_today: float | None
+
+
+class ReportScheduleOut(BaseModel):
+    schedule_id: int | None
+    name: str
+    customer: str
+    enabled: bool
+    interval_seconds: int | None
+    calendar_day: bool
+    source: str | None
+    last_run_at: datetime | None
+    latest_job_id: int | None
+    today_status: ReportDayStatus
+    today_rows: int
+    yesterday_rows: int
+    last_week_rows: int
+    pct_vs_yesterday: float | None
+    pct_vs_last_week: float | None
+    pct_yesterday_vs_last_week: float | None
+    failed_today: int
+    days: list[ReportDayOut]
+
+
+class ReportCustomerOut(BaseModel):
+    customer: str
+    schedules: list[ReportScheduleOut]
+    rows_today: int
+    rows_yesterday: int
+    rows_last_week: int
+    pct_vs_yesterday: float | None
+    pct_vs_last_week: float | None
+    failed_today: int
+
+
+class ReportAlertOut(BaseModel):
+    kind: Literal["failed", "missed"]
+    customer: str
+    job_name: str
+    schedule_id: int | None
+    job_id: int | None
+    at: datetime | None
+    error: str | None
+    occurrences: int
+    recipients: list[str]
+
+
+class ReportOut(BaseModel):
+    generated_at: datetime
+    retention_days: int
+    window_days: int
+    timezone: str
+    totals: ReportTotalsOut
+    customers: list[ReportCustomerOut]
+    alerts: list[ReportAlertOut]

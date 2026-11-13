@@ -88,3 +88,28 @@ def test_unset_config_falls_back_to_env(client):
 @pytest.mark.parametrize("method,kwargs", [("get", {}), ("patch", {"json": CFG})])
 def test_members_cannot_read_or_change_notification_settings(member_client, method, kwargs):
     assert getattr(member_client, method)("/settings/notifications", **kwargs).status_code == 403
+
+
+def test_failure_alert_passes_customer_to_email_and_slack(monkeypatch):
+    cfg = {
+        **CFG,
+        "smtp_from": "noc-alerts@evergent.com",
+        "smtp_user": "noc-alerts@evergent.com",
+        "smtp_password": "secret",
+    }
+    monkeypatch.setattr(notifications, "load_config", lambda: cfg)
+    monkeypatch.setattr(notifications, "_retry", lambda fn: fn())
+
+    captured: dict[str, str] = {}
+
+    def email(_cfg, _recipients, _name, _job_id, _error, customer=""):
+        captured["email"] = customer
+
+    def slack(_cfg, _name, _job_id, _error, customer=""):
+        captured["slack"] = customer
+
+    monkeypatch.setattr(notifications, "_send_email", email)
+    monkeypatch.setattr(notifications, "_send_slack", slack)
+
+    notifications.send_failure_alert(["ops@evergent.com"], "Daily_aha", 42, "boom", "ACME")
+    assert captured == {"email": "ACME", "slack": "ACME"}

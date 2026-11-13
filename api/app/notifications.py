@@ -103,6 +103,7 @@ def send_failure_alert(
     schedule_name: str,
     job_id: int,
     error_message: str,
+    customer: str = "",
 ) -> None:
     """Send email + Slack notification for a failed job (sync).
 
@@ -112,13 +113,17 @@ def send_failure_alert(
 
     if recipients and cfg["smtp_host"] and cfg["smtp_user"]:
         try:
-            _retry(lambda: _send_email(cfg, recipients, schedule_name, job_id, error_message))
+            _retry(
+                lambda: _send_email(
+                    cfg, recipients, schedule_name, job_id, error_message, customer
+                )
+            )
         except Exception as exc:
             log.exception("email.final_error", exc_info=exc)
 
     if cfg["slack_webhook_url"]:
         try:
-            _retry(lambda: _send_slack(cfg, schedule_name, job_id, error_message))
+            _retry(lambda: _send_slack(cfg, schedule_name, job_id, error_message, customer))
         except Exception as exc:
             log.exception("slack.final_error", exc_info=exc)
 
@@ -129,14 +134,17 @@ def _send_email(
     schedule_name: str,
     job_id: int,
     error_message: str,
+    customer: str = "",
 ) -> None:
     """Send email to recipients."""
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"LogVault: Schedule '{schedule_name}' failed (Job {job_id})"
+    who = f"[{customer}] " if customer else ""
+    msg["Subject"] = f"LogVault: {who}Schedule '{schedule_name}' failed (Job {job_id})"
     msg["From"] = cfg["smtp_from"]
     msg["To"] = ", ".join(recipients)
 
     text = f"""Schedule '{schedule_name}' (Job {job_id}) failed.
+Customer: {customer or "(unassigned)"}
 
 Error: {error_message}
 
@@ -153,7 +161,13 @@ Check the job details at the LogVault dashboard.
     finally:
         server.quit()
 
-    log.info("email.sent", recipients=recipients, schedule=schedule_name, job_id=job_id)
+    log.info(
+        "email.sent",
+        recipients=recipients,
+        schedule=schedule_name,
+        job_id=job_id,
+        customer=customer,
+    )
 
 
 def _send_slack(
@@ -161,6 +175,7 @@ def _send_slack(
     schedule_name: str,
     job_id: int,
     error_message: str,
+    customer: str = "",
 ) -> None:
     """Send Slack notification."""
     payload = {
@@ -170,7 +185,12 @@ def _send_slack(
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"*Schedule:* {schedule_name}\n*Job ID:* {job_id}\n*Error:* {error_message}",
+                    "text": (
+                        f"*Customer:* {customer or '(unassigned)'}\n"
+                        f"*Schedule:* {schedule_name}\n"
+                        f"*Job ID:* {job_id}\n"
+                        f"*Error:* {error_message}"
+                    ),
                 },
             }
         ],

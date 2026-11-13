@@ -1122,3 +1122,109 @@ export const listComparisonRuns = (id: number, limit = 20) =>
   req<ComparisonRunSummary[]>(`/comparisons/${id}/runs?limit=${limit}`);
 export const getComparisonRun = (comparisonId: number, runId: number) =>
   req<ComparisonRun>(`/comparisons/${comparisonId}/runs/${runId}`);
+
+// -- reports -----------------------------------------------------------------
+
+export type ReportDayStatus =
+  | "ok"
+  | "failed"
+  | "running"
+  | "canceled"
+  | "partial"
+  | "missed"
+  | "pending"
+  | "off"
+  | "none";
+
+export type ReportDay = {
+  date: string;
+  status: ReportDayStatus;
+  rows: number;
+  runs: number;
+  completed: number;
+  failed: number;
+};
+
+export type ReportSchedule = {
+  schedule_id: number | null;
+  name: string;
+  customer: string;
+  enabled: boolean;
+  interval_seconds: number | null;
+  calendar_day: boolean;
+  source: string | null;
+  last_run_at: string | null;
+  latest_job_id: number | null;
+  today_status: ReportDayStatus;
+  today_rows: number;
+  yesterday_rows: number;
+  last_week_rows: number;
+  pct_vs_yesterday: number | null;
+  pct_vs_last_week: number | null;
+  pct_yesterday_vs_last_week: number | null;
+  failed_today: number;
+  days: ReportDay[];
+};
+
+export type ReportCustomer = {
+  customer: string;
+  schedules: ReportSchedule[];
+  rows_today: number;
+  rows_yesterday: number;
+  rows_last_week: number;
+  pct_vs_yesterday: number | null;
+  pct_vs_last_week: number | null;
+  failed_today: number;
+};
+
+export type ReportAlert = {
+  kind: "failed" | "missed";
+  customer: string;
+  job_name: string;
+  schedule_id: number | null;
+  job_id: number | null;
+  at: string | null;
+  error: string | null;
+  occurrences: number;
+  recipients: string[];
+};
+
+export type ReportTotals = {
+  customers: number;
+  schedules: number;
+  enabled_schedules: number;
+  runs_today: number;
+  completed_today: number;
+  failed_today: number;
+  active_today: number;
+  rows_today: number;
+  rows_yesterday: number;
+  rows_last_week: number;
+  pct_vs_yesterday: number | null;
+  pct_vs_last_week: number | null;
+  success_rate_today: number | null;
+};
+
+export type ReportSummary = {
+  generated_at: string;
+  retention_days: number;
+  window_days: number;
+  timezone: string;
+  totals: ReportTotals;
+  customers: ReportCustomer[];
+  alerts: ReportAlert[];
+};
+
+export type ReportSettings = {
+  retention_days: number;
+  updated_at: string | null;
+  updated_by: string | null;
+};
+
+export const getReport = (days: number) => req<ReportSummary>(`/reports?days=${days}`);
+export const getReportSettings = () => req<ReportSettings>("/reports/settings");
+export const updateReportSettings = (retention_days: number) =>
+  req<ReportSettings>("/reports/settings", {
+    method: "PUT",
+    body: JSON.stringify({ retention_days }),
+  });

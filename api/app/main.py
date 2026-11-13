@@ -23,6 +23,7 @@ from app.routers import (
     labels,
     log_formats,
     new_relic,
+    reports,
     s3_profiles,
     schedules,
     templates,
@@ -88,6 +89,7 @@ app.include_router(admin.router, dependencies=_auth_dep)
 app.include_router(templates.router, dependencies=_auth_dep)
 app.include_router(log_formats.router, dependencies=_auth_dep)
 app.include_router(customers.router, dependencies=_auth_dep)
+app.include_router(reports.router, dependencies=_auth_dep)
 
 
 @app.get("/", tags=["meta"])

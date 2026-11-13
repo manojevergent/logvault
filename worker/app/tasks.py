@@ -6,6 +6,7 @@ Phase 1: a single `ping` health task. Extraction tasks land in Phase 4.
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import shutil
 from datetime import UTC, datetime
@@ -45,6 +46,24 @@ def _require_disk_space() -> None:
         )
 
 
+def _as_dict(value: object) -> dict:
+    """JSON column value as a dict, whichever driver decoded it.
+
+    The raw SELECT below bypasses SQLAlchemy's JSON result processor, and
+    drivers differ: some return a dict, others the stored text. A string here
+    used to turn the customer lookup into an AttributeError, which the caller
+    suppresses — so alerts silently stopped instead of failing loudly.
+    """
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value:
+        with contextlib.suppress(Exception):
+            parsed = json.loads(value)
+            if isinstance(parsed, dict):
+                return parsed
+    return {}
+
+
 def _send_alert_if_scheduled(conn, job: dict, error_message: str) -> None:
     """Send alert if this job is from a schedule."""
     # `or ""` rather than a .get default: created_by is NULL for every job
@@ -60,18 +79,27 @@ def _send_alert_if_scheduled(conn, job: dict, error_message: str) -> None:
         schedule_id = int(created_by.split(":")[1])
         result = (
             conn.execute(
-                text("SELECT id, name, alert_recipients FROM schedules WHERE id = :id"),
+                text(
+                    "SELECT id, name, alert_recipients, filter_spec "
+                    "FROM schedules WHERE id = :id"
+                ),
                 {"id": schedule_id},
             )
             .mappings()
             .first()
         )
         if result and result["alert_recipients"]:
+            spec = _as_dict(result.get("filter_spec"))
+            customer = str(spec.get("customer") or "").strip()
+            if not customer:
+                job_spec = _as_dict(job.get("filter_spec"))
+                customer = str(job_spec.get("customer") or "").strip()
             send_failure_alert(
                 result["alert_recipients"],
                 result["name"],
                 job["id"],
                 error_message,
+                customer,
             )
     except Exception as exc:
         # suppress: alerting failure shouldn't affect job failure handling

@@ -3,6 +3,7 @@
 import {
   Activity,
   ArrowLeftRight,
+  BarChart3,
   Bookmark,
   CalendarClock,
   CloudUpload,
@@ -35,6 +36,7 @@ const primaryNav: NavItem[] = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/jobs", label: "Jobs", icon: ListChecks },
   { href: "/customers", label: "Customers", icon: Users },
+  { href: "/reports", label: "Reports", icon: BarChart3 },
   { href: "/jobs/new", label: "New extraction", icon: PlusCircle },
   { href: "/schedules", label: "Schedules", icon: CalendarClock },
   { href: "/compare", label: "Compare", icon: ArrowLeftRight },
