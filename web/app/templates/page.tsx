@@ -90,8 +90,9 @@ export default function TemplatesPage() {
       <div className="space-y-1.5 pb-6">
         <h1 className="text-xl font-semibold tracking-tight">Saved searches</h1>
         <p className="text-sm text-muted-foreground">
-          Reusable phrase/ID/message-type filters, saved from the New Extraction wizard or a
-          schedule. Not tied to any credential, region, or index — load one into any job.
+          Reusable filters and parse patterns, saved from the New Extraction wizard or a schedule.
+          Each search stores the source it runs against — index, region and credential — along with
+          its customer, so loading one is enough to run it.
         </p>
       </div>
 
@@ -563,6 +564,9 @@ function TemplateEditForm({
     // A saved search is filed under a customer; it names the export folder and
     // is what the jobs list shows, so it is not optional.
     customer.trim() !== "" &&
+    // ...and it stores the index it runs against, so loading it never queries
+    // the wrong source (which silently returns zero rows).
+    resolvedSource.index_target_id != null &&
     (splitCsv(phrasesText).length > 0 ||
       splitCsv(idsText).length > 0 ||
       splitCsv(messageTypesText).length > 0 ||
@@ -586,13 +590,13 @@ function TemplateEditForm({
               <p className="text-xs text-danger">Required to save this search.</p>
             )}
           </Field>
-          <Field label="Default source (optional)">
+          <Field label="Source (saved with the search)">
             <select
               className={fieldClass}
               value={sourceIdx}
               onChange={(e) => setSourceIdx(e.target.value ? Number(e.target.value) : "")}
             >
-              <option value="">No default — pick at run time…</option>
+              <option value="">No source — required to save.</option>
               {allIndexes?.map((i) => (
                 <option key={i.id} value={i.id}>
                   {i.name} · {i.region_code}
@@ -601,8 +605,14 @@ function TemplateEditForm({
               ))}
             </select>
             <p className="text-xs text-muted-foreground">
-              Pre-fills batch runs and the wizard with this search&rsquo;s source.
+              The index is stored with the search; loading it selects this source automatically.
             </p>
+            {resolvedSource.index_target_id == null && (
+              <p className="text-xs text-danger">
+                Pick the source this search runs against — without it a load can query the wrong
+                index and return nothing.
+              </p>
+            )}
           </Field>
           {sourceTarget && !sourceTarget.credential_id && (
             <Field label="Credential (source has none)">
@@ -894,7 +904,16 @@ function TemplateEditForm({
         {save.isError && <p className="text-xs text-danger">{(save.error as Error).message}</p>}
 
         <div className="flex items-center gap-2">
-          <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending || !canSave}>
+          <Button
+            size="sm"
+            onClick={() => save.mutate()}
+            disabled={save.isPending || !canSave}
+            title={
+              resolvedSource.index_target_id == null
+                ? "Pick the source this search runs against"
+                : undefined
+            }
+          >
             {save.isPending ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (

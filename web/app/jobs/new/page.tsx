@@ -261,6 +261,13 @@ export default function NewJobPage() {
     () => new Set<StepNumber>([1])
   );
 
+  // Shared by the quick-start picker at the top and the Filter step's picker.
+  function pickTemplate(id: number | "") {
+    setTemplateId(id);
+    const tpl = templates?.find((t) => t.id === id);
+    if (tpl) applyTemplate(tpl);
+  }
+
   function applyTemplate(tpl: FilterTemplate) {
     setSearchLabel(tpl.name);
     // The customer is part of the search: it names the export folder and is
@@ -440,6 +447,9 @@ export default function NewJobPage() {
   function startSaveAsSearch() {
     const name = templateName.trim();
     if (!name) return;
+    // The source is part of the saved search; the button already requires one,
+    // and this guard keeps a cleared source from slipping through.
+    if (indexId === "") return;
     saveTemplate.reset();
     const existing = findTemplateByName(name);
     if (existing) {
@@ -1079,6 +1089,95 @@ export default function NewJobPage() {
         · {s3Label}
       </p>
 
+      {/* Quick start: pick a saved search and run it without walking the
+          steps. The picker searches by name or customer, and loading applies
+          the source, customer, filter and parse pattern in one go. */}
+      <Card className="mb-4 border-primary/30">
+        <CardContent className="space-y-3 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold">Start from a saved search</p>
+              <p className="text-xs text-muted-foreground">
+                Search by name or customer. The search brings its own index, customer, filter and
+                parse pattern — then run it right here.
+              </p>
+            </div>
+            {loadedTemplate && (
+              <Button size="sm" variant="outline" onClick={() => goToStep(5)}>
+                Review setup
+              </Button>
+            )}
+          </div>
+
+          <div className="max-w-xl">
+            <TemplatePicker templates={templates ?? []} value={templateId} onPick={pickTemplate} />
+          </div>
+
+          {loadedTemplate ? (
+            <div className="space-y-2 border-t border-border pt-3">
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                <span>
+                  Source{" "}
+                  <strong className="text-foreground">
+                    {savedTemplateSource
+                      ? `${savedTemplateSource.name} · ${savedTemplateSource.region_code}`
+                      : "not saved — pick one in step 1"}
+                  </strong>
+                </span>
+                <span>
+                  Customer <strong className="text-foreground">{customer.trim() || "—"}</strong>
+                </span>
+                <span>
+                  {positiveCount} required · {exclusionCount} excluded
+                </span>
+                <span>
+                  {aggEnabled
+                    ? `${
+                        useLibrary
+                          ? "Log Formats library"
+                          : `${regexFields.length} field${regexFields.length === 1 ? "" : "s"}`
+                      }${aggregateEnabled ? " · aggregate" : " · parse only"}`
+                    : "parse off"}
+                </span>
+                <span className="font-mono">
+                  {formatEpoch(start)} → {formatEpoch(end)} UTC
+                </span>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!canRun || create.isPending}
+                  onClick={() => create.mutate(true)}
+                  title="Sample the newest part of the window, capped at 100 rows"
+                >
+                  Test filter
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={!canRun || create.isPending}
+                  onClick={() => create.mutate(false)}
+                >
+                  {create.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  Run extraction
+                </Button>
+                {!canRun && reviewBlockers[0] && (
+                  <span className="text-xs text-muted-foreground">{reviewBlockers[0].text}</span>
+                )}
+              </div>
+              {create.isError && (
+                <p className="text-xs text-danger">{(create.error as Error).message}</p>
+              )}
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Nothing selected — pick one above, or build an extraction from scratch below.
+            </p>
+          )}
+        </CardContent>
+      </Card>
+
       <div className="grid items-start gap-6 lg:grid-cols-[236px_minmax(0,1fr)]">
         <aside className="hidden lg:block">
           <div className="sticky top-4 space-y-3">
@@ -1402,11 +1501,7 @@ export default function NewJobPage() {
                   <TemplatePicker
                     templates={templates ?? []}
                     value={templateId}
-                    onPick={(v) => {
-                      setTemplateId(v);
-                      const tpl = templates?.find((t) => t.id === v);
-                      if (tpl) applyTemplate(tpl);
-                    }}
+                    onPick={pickTemplate}
                   />
                 </div>
                 {savingTemplate ? (
@@ -1423,7 +1518,7 @@ export default function NewJobPage() {
                     </div>
                     <Button
                       size="sm"
-                      disabled={!templateName.trim() || saveTemplate.isPending}
+                      disabled={!templateName.trim() || saveTemplate.isPending || indexId === ""}
                       onClick={startSaveAsSearch}
                     >
                       {saveTemplate.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
@@ -1440,15 +1535,17 @@ export default function NewJobPage() {
                     // A parse pattern alone is worth saving — it is the laborious
                     // part, and it stands on its own without any filter.
                     // A customer is mandatory: it files the search's extracts.
-                    disabled={!hasSomethingToSave || !customer.trim()}
+                    disabled={!hasSomethingToSave || !customer.trim() || indexId === ""}
                     onClick={() => {
                       setTemplateName(searchLabel);
                       setSavingTemplate(true);
                     }}
                     title={
-                      customer.trim()
-                        ? "Save the current filters and parse pattern as a reusable search"
-                        : "Enter a customer name first — saved searches are filed per customer"
+                      indexId === ""
+                        ? "Pick a source in step 1 — saved searches remember the index they run against"
+                        : customer.trim()
+                          ? "Save the current filters, source and parse pattern as a reusable search"
+                          : "Enter a customer name first — saved searches are filed per customer"
                     }
                   >
                     <Bookmark className="h-3.5 w-3.5" />
@@ -1470,10 +1567,17 @@ export default function NewJobPage() {
                   )}
                 </div>
                 {hasSomethingToSave && !savingTemplate && (
-                  <p className="text-xs text-muted-foreground">
-                    Saves {savedParts.join(" + ")}
-                    {customer.trim() ? ` for customer ${customer.trim()}` : ""}.
-                  </p>
+                  <>
+                    {indexId === "" && (
+                      <p className="text-xs text-danger">
+                        Pick a source so this search keeps its index.
+                      </p>
+                    )}
+                    <p className="text-xs text-muted-foreground">
+                      Saves {savedParts.join(" + ")}
+                      {customer.trim() ? ` for customer ${customer.trim()}` : ""}.
+                    </p>
+                  </>
                 )}
                 {saveTemplate.isError &&
                   !saveConflict &&
@@ -2065,10 +2169,17 @@ export default function NewJobPage() {
                               !aggValid ||
                               !customer.trim() ||
                               !searchLabel.trim() ||
+                              indexId === "" ||
                               updateExistingTemplate.isPending
                             }
                             onClick={startSaveExistingChanges}
-                            title={customer.trim() ? undefined : "Enter a customer name first"}
+                            title={
+                              indexId === ""
+                                ? "Pick a source in step 1 first — the search stores its index"
+                                : customer.trim()
+                                  ? undefined
+                                  : "Enter a customer name first"
+                            }
                           >
                             {updateExistingTemplate.isPending ? (
                               <Loader2 className="h-3.5 w-3.5 animate-spin" />
