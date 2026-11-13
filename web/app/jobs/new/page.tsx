@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bookmark, Check, Loader2, Upload, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bookmark, Check, Loader2, Upload, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import * as React from "react";
@@ -53,6 +53,39 @@ type TemplateSaveConflict = {
   existingId: number | null;
   existingName: string;
 };
+
+// The setup is long enough that stacking every card produced a page several
+// screens tall, with unrelated cards side by side under CSS multicol. Splitting
+// it into five focused steps keeps one decision on screen at a time and gives
+// the rail something stable to point at.
+type StepNumber = 1 | 2 | 3 | 4 | 5;
+const STEPS: { n: StepNumber; label: string; description: string }[] = [
+  {
+    n: 1,
+    label: "Source & window",
+    description: "Where the logs live, and the exact window to read.",
+  },
+  {
+    n: 2,
+    label: "Filter",
+    description: "Name the extraction and choose which lines to keep or exclude.",
+  },
+  {
+    n: 3,
+    label: "Parse & aggregate",
+    description: "Optionally turn each matched line into named fields and counts.",
+  },
+  {
+    n: 4,
+    label: "Output & options",
+    description: "Set the file shape, chunking, and an optional S3 destination.",
+  },
+  {
+    n: 5,
+    label: "Review & run",
+    description: "Check the whole setup, then test or run the extraction.",
+  },
+];
 
 function isDuplicateNameError(error: unknown): boolean {
   return error instanceof Error && /already exists/i.test(error.message);
@@ -219,6 +252,14 @@ export default function NewJobPage() {
   // Groups this job's output files under exports/<customer>/. Comes from the
   // saved search when one is loaded, and is editable for a one-off run.
   const [customer, setCustomer] = React.useState("");
+  // One step at a time: the rail and the footer move between them. Every step
+  // stays mounted (hidden when inactive), so no field loses its value.
+  const [step, setStep] = React.useState<StepNumber>(1);
+  // Steps that have actually been opened. A tick means "you have been here and
+  // it is still valid", not "this step would be valid if you looked at it".
+  const [visitedSteps, setVisitedSteps] = React.useState<Set<StepNumber>>(
+    () => new Set<StepNumber>([1])
+  );
 
   function applyTemplate(tpl: FilterTemplate) {
     setSearchLabel(tpl.name);
@@ -423,6 +464,9 @@ export default function NewJobPage() {
     const conflict = saveConflict;
     setSaveConflict(null);
     if (!conflict) return;
+    // Both inputs live in the Filter step; make sure it is on screen before
+    // trying to focus one of them.
+    setStep(2);
     if (conflict.mode === "create") {
       setSavingTemplate(true);
       setTemplateName(conflict.name);
@@ -465,6 +509,7 @@ export default function NewJobPage() {
   // raises an update conflict lives lower in the page. Bring the choice into view.
   React.useEffect(() => {
     if (!saveConflict) return;
+    setStep(2);
     requestAnimationFrame(() => {
       conflictRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
     });
@@ -873,969 +918,1399 @@ export default function NewJobPage() {
     e.target.value = "";
   }
 
+  // ---- Guided steps ------------------------------------------------------
+  const stepMeta = STEPS.find((s) => s.n === step) ?? STEPS[0];
+  const credentialLabel =
+    credentials?.find((c) => c.id === effectiveCredentialId)?.label ?? "No credential";
+  const s3Label =
+    s3ProfileId === ""
+      ? "Local download"
+      : (s3Profiles?.find((p) => p.id === s3ProfileId)?.name ?? "S3");
+
+  const positiveCount =
+    effectivePhrases.length + effectiveExact.length + ids.length + messageTypes.length;
+  const exclusionCount = effectiveExclude.length + effectiveExcludeExact.length;
+  // First few clauses, so the review step reads like a sentence instead of a
+  // list of counters.
+  const requiredPreview = [...effectivePhrases, ...effectiveExact.map((p) => `"${p}"`)];
+  const exclusionPreview = [
+    ...effectiveExclude.map((p) => `NOT ${p}`),
+    ...effectiveExcludeExact.map((p) => `NOT "${p}"`),
+  ];
+
+  const step1Done = indexId !== "" && effectiveCredentialId !== "" && validRange;
+  const step2Done = searchLabel.trim() !== "" && pipeline !== null;
+  const step3Done = aggValid;
+
+  const stepSummary: Record<StepNumber, string> = {
+    1: selectedIndex ? `${selectedIndex.name} · ${selectedIndex.region_code}` : "No source chosen",
+    2:
+      positiveCount === 0
+        ? "No filter clauses yet"
+        : `${positiveCount} required${exclusionCount ? ` · ${exclusionCount} excluded` : ""}`,
+    3: !aggEnabled
+      ? "Parsing off"
+      : `${
+          useLibrary
+            ? "Log Formats library"
+            : `${regexFields.length} field${regexFields.length === 1 ? "" : "s"}`
+        }${aggregateEnabled ? " · aggregate" : " · parse only"}`,
+    4: `${format === "bigquery" ? "BigQuery" : format.toUpperCase()} · ${
+      s3ProfileId === "" ? "local" : "S3"
+    }`,
+    5: canRun ? "Ready to run" : "Needs attention",
+  };
+  const stepDone: Record<StepNumber, boolean> = {
+    1: step1Done,
+    2: step2Done,
+    3: step3Done,
+    4: true,
+    5: canRun,
+  };
+  const stepBlocker: Record<StepNumber, string | null> = {
+    1:
+      indexId === ""
+        ? "Choose a source to continue."
+        : effectiveCredentialId === ""
+          ? "Choose a credential for this source."
+          : !validRange
+            ? "The end of the window must be after the start."
+            : null,
+    2:
+      searchLabel.trim() === ""
+        ? "Give this extraction a name."
+        : pipeline === null
+          ? "Add at least one required word, exact phrase, ID or message type."
+          : null,
+    3: aggValid ? null : "Finish the parse settings to continue.",
+    4: null,
+    5: null,
+  };
+  const canContinue = stepDone[step];
+
+  function goToStep(next: StepNumber) {
+    setStep(next);
+    setVisitedSteps((prev) => (prev.has(next) ? prev : new Set(prev).add(next)));
+    // The parse step can be tall, so a new step always starts at the top rather
+    // than leaving the reader halfway down the previous one.
+    requestAnimationFrame(() => {
+      document.querySelector("main")?.scrollTo({ top: 0, behavior: "smooth" });
+    });
+  }
+
+  const reviewBlockers = [
+    indexId === "" && { text: "Choose a source", to: 1 as StepNumber },
+    effectiveCredentialId === "" && { text: "Choose a credential", to: 1 as StepNumber },
+    !validRange && { text: "The time window is invalid", to: 1 as StepNumber },
+    searchLabel.trim() === "" && { text: "Name the extraction", to: 2 as StepNumber },
+    pipeline === null && { text: "Add at least one filter clause", to: 2 as StepNumber },
+    !aggValid && { text: "Fix the parse settings", to: 3 as StepNumber },
+  ].filter(Boolean) as { text: string; to: StepNumber }[];
+
   return (
     <div className="mx-auto max-w-6xl animate-fade-in px-4 py-5">
-      <h1 className="pb-3 text-xl font-semibold tracking-tight">New extraction</h1>
+      <div className="pb-4">
+        <div className="flex flex-wrap items-end justify-between gap-2">
+          <div>
+            <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Extract</p>
+            <h1 className="text-xl font-semibold tracking-tight">New extraction</h1>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Step {step} of {STEPS.length} · {stepMeta.label}
+          </p>
+        </div>
+      </div>
 
-      {/* Two columns on wide screens so the whole form fits ~one viewport:
-          multicol keeps DOM order (no code moves) with break-inside-avoid so
-          no card ever splits across columns. Single column below xl. */}
-      <div className="xl:columns-2 [&>*]:mb-3 [&>*]:break-inside-avoid">
-        {/* One source profile carries region + index + credential. */}
-        <Section title="Source">
-          <Field label="Source" className="sm:col-span-2">
-            <select
-              className={fieldClass}
-              value={indexId}
-              onChange={(e) => {
-                const id = e.target.value ? Number(e.target.value) : "";
-                setIndexId(id);
-                const picked = allIndexes?.find((i) => i.id === id);
-                if (picked) {
-                  setRegion(picked.region_code);
-                  // Only when the profile names one; otherwise the picker below
-                  // stays visible so an older target can still be used.
-                  if (picked.credential_id) setCredentialId(picked.credential_id);
-                }
-              }}
+      {/* Narrow screens get the same steps as a wrapping strip; the rail is only
+          worth its width once there is room for it. */}
+      <div className="mb-4 flex flex-wrap gap-1.5 lg:hidden">
+        {STEPS.map((s) => (
+          <button
+            key={s.n}
+            type="button"
+            onClick={() => goToStep(s.n)}
+            aria-current={step === s.n ? "step" : undefined}
+            className={`border px-2.5 py-1 text-xs transition-colors ${
+              step === s.n
+                ? "border-primary bg-primary text-primary-foreground"
+                : "border-border text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {s.n}. {s.label}
+          </button>
+        ))}
+      </div>
+
+      {/* The rail summary is hidden on narrow screens; keep the same three
+          facts in one line so the run still has context while stepping. */}
+      <p className="mb-4 text-xs text-muted-foreground lg:hidden">
+        {selectedIndex?.name ?? "No source"} · {totalChunks} chunk
+        {totalChunks === 1 ? "" : "s"} · {format === "bigquery" ? "BigQuery" : format.toUpperCase()}{" "}
+        · {s3Label}
+      </p>
+
+      <div className="grid items-start gap-6 lg:grid-cols-[236px_minmax(0,1fr)]">
+        <aside className="hidden lg:block">
+          <div className="sticky top-4 space-y-3">
+            <nav
+              aria-label="Extraction steps"
+              className="border border-border/70 bg-card p-1.5 shadow-card"
             >
-              <option value="">Select a source…</option>
-              {allIndexes?.map((i) => (
-                <option key={i.id} value={i.id}>
-                  {i.name} · {i.region_code}
-                  {i.credential_label ? ` · ${i.credential_label}` : ""}
-                </option>
-              ))}
-            </select>
-            {selectedIndex && (
-              <p className="text-xs text-muted-foreground">
-                {selectedIndex.region_code} · index{" "}
-                <span className="font-mono">
-                  {selectedIndex.physical_index ||
-                    (selectedIndex.full_index_string
-                      ? selectedIndex.name
-                      : "Default (org default)")}
-                </span>
-                {selectedIndex.credential_label ? (
-                  <> · credential {selectedIndex.credential_label}</>
-                ) : null}
+              {STEPS.map((s) => {
+                const current = step === s.n;
+                const done = stepDone[s.n] && visitedSteps.has(s.n) && !current;
+                return (
+                  <button
+                    key={s.n}
+                    type="button"
+                    onClick={() => goToStep(s.n)}
+                    aria-current={current ? "step" : undefined}
+                    className={`flex w-full items-start gap-2.5 border px-2 py-2 text-left transition-colors ${
+                      current
+                        ? "border-border bg-accent/60"
+                        : "border-transparent hover:bg-accent/40"
+                    }`}
+                  >
+                    <span
+                      className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center border text-[11px] font-medium ${
+                        current
+                          ? "border-primary bg-primary text-primary-foreground"
+                          : done
+                            ? "border-success/40 bg-success/10 text-success"
+                            : "border-border bg-muted text-muted-foreground"
+                      }`}
+                    >
+                      {done ? <Check className="h-3 w-3" /> : s.n}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span
+                        className={`block text-sm ${
+                          current ? "font-semibold text-foreground" : "text-muted-foreground"
+                        }`}
+                      >
+                        {s.label}
+                      </span>
+                      <span className="block truncate text-[11px] text-muted-foreground">
+                        {stepSummary[s.n]}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </nav>
+
+            {/* The numbers that decide how long a run takes and where its files
+                land — kept in view while editing any step. */}
+            <div className="border border-border/70 bg-card p-3 shadow-card">
+              <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                This run
               </p>
-            )}
-          </Field>
-          {/* The loaded search remembers where it was built — one click pulls
-              that source in, instead of re-picking it every time. */}
-          {(() => {
-            const loaded = templates?.find((t) => t.id === templateId);
-            const savedIdx = allIndexes?.find((i) => i.id === loaded?.index_target_id);
-            if (!loaded?.index_target_id || !savedIdx || savedIdx.id === indexId) return null;
-            return (
-              <p className="text-xs text-muted-foreground sm:col-span-2">
-                Saved with this search:{" "}
-                <span className="font-medium text-foreground">
-                  {savedIdx.name} · {savedIdx.region_code}
-                </span>{" "}
-                <button
-                  type="button"
-                  className="text-primary underline"
-                  onClick={() => {
-                    setIndexId(savedIdx.id);
-                    setRegion(savedIdx.region_code);
-                    if (savedIdx.credential_id) setCredentialId(savedIdx.credential_id);
+              <dl className="mt-2 space-y-1.5 text-xs">
+                <div>
+                  <dt className="text-muted-foreground">Window</dt>
+                  <dd className="font-mono text-[11px] leading-5">
+                    {validRange ? (
+                      <>
+                        {formatEpoch(start)}
+                        <br />→ {formatEpoch(end)} UTC
+                      </>
+                    ) : (
+                      <span className="text-danger">End must be after start</span>
+                    )}
+                  </dd>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <dt className="text-muted-foreground">Chunks</dt>
+                  <dd>
+                    {totalChunks} · ~{fmtEstimate(totalChunks)}
+                  </dd>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <dt className="text-muted-foreground">IDs</dt>
+                  <dd>
+                    {ids.length} · {batches} batch{batches === 1 ? "" : "es"}
+                  </dd>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <dt className="text-muted-foreground">Output</dt>
+                  <dd>{format === "bigquery" ? "BigQuery" : format.toUpperCase()}</dd>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <dt className="text-muted-foreground">Destination</dt>
+                  <dd className="truncate">{s3Label}</dd>
+                </div>
+              </dl>
+            </div>
+          </div>
+        </aside>
+
+        <div className="min-w-0">
+          <StepCard n={1} active={step === 1}>
+            {/* One source profile carries region + index + credential. */}
+            <StepGroup title="Source">
+              <Field label="Source" className="sm:col-span-2">
+                <select
+                  className={fieldClass}
+                  value={indexId}
+                  onChange={(e) => {
+                    const id = e.target.value ? Number(e.target.value) : "";
+                    setIndexId(id);
+                    const picked = allIndexes?.find((i) => i.id === id);
+                    if (picked) {
+                      setRegion(picked.region_code);
+                      // Only when the profile names one; otherwise the picker below
+                      // stays visible so an older target can still be used.
+                      if (picked.credential_id) setCredentialId(picked.credential_id);
+                    }
                   }}
                 >
-                  Use saved source
-                </button>
-              </p>
-            );
-          })()}
-          {/* Only asked for when the chosen source doesn't name a credential —
-              targets created before profiles existed. */}
-          {(!selectedIndex || !selectedIndex.credential_id) && (
-            <Field label="Credential" className="sm:col-span-2">
-              <select
-                className={fieldClass}
-                value={credentialId}
-                onChange={(e) => setCredentialId(e.target.value ? Number(e.target.value) : "")}
-              >
-                <option value="">Select a credential…</option>
-                {credentials?.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.label} ({c.org_slug})
-                  </option>
-                ))}
-              </select>
-              {selectedIndex && (
-                <p className="text-xs text-muted-foreground">
-                  This source has no credential set — add one on the{" "}
-                  <Link href="/indexes" className="underline">
-                    Indexes
-                  </Link>{" "}
-                  page and it won&rsquo;t be asked for again.
-                </p>
-              )}
-            </Field>
-          )}
-        </Section>
-
-        {/* 3. Time range */}
-        <Section title="Time range">
-          <div className="space-y-1.5 sm:col-span-2">
-            <Label>Timezone</Label>
-            <div className="flex items-center gap-2">
-              {(["UTC", "IST"] as Tz[]).map((z) => (
-                <button
-                  key={z}
-                  type="button"
-                  onClick={() => setTz(z)}
-                  style={
-                    tz === z
-                      ? { backgroundColor: "#39c463", color: "#000", borderColor: "#39c463" }
-                      : {}
-                  }
-                  className={`border px-6 py-2 text-sm font-semibold transition-colors ${
-                    tz === z
-                      ? "border-transparent"
-                      : "border-border text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  {z}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 sm:col-span-2">
-            {PRESETS.map((p) => (
-              <Button
-                key={p.label}
-                type="button"
-                size="sm"
-                variant={preset === p.seconds ? "primary" : "outline"}
-                onClick={() => setPreset(p.seconds)}
-              >
-                {p.label}
-              </Button>
-            ))}
-            <Button
-              type="button"
-              size="sm"
-              variant={preset === "custom" ? "primary" : "outline"}
-              onClick={() => setPreset("custom")}
-            >
-              Custom
-            </Button>
-          </div>
-          {preset === "custom" && (
-            <>
-              <Field label={`Start (${tz})`}>
-                <Input
-                  type="datetime-local"
-                  value={customStart}
-                  onChange={(e) => setCustomStart(e.target.value)}
-                />
-              </Field>
-              <Field label={`End (${tz})`}>
-                <Input
-                  type="datetime-local"
-                  value={customEnd}
-                  onChange={(e) => setCustomEnd(e.target.value)}
-                />
-              </Field>
-            </>
-          )}
-          {recentRanges.length > 0 && (
-            <div className="sm:col-span-2">
-              <p className="mb-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70">
-                Recent
-              </p>
-              <div className="flex flex-col gap-0.5">
-                {recentRanges.map((r, i) => (
-                  <button
-                    key={i}
-                    type="button"
-                    className="w-full border border-transparent px-2 py-1 text-left font-mono text-xs text-muted-foreground hover:border-border hover:text-foreground"
-                    onClick={() => {
-                      setPreset("custom");
-                      setTz(r.tz);
-                      setCustomStart(epochToLocal(r.start, r.tz));
-                      setCustomEnd(epochToLocal(r.end, r.tz));
-                    }}
-                  >
-                    {r.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-          <p className="font-mono text-xs text-muted-foreground sm:col-span-2">
-            {validRange ? (
-              <>
-                Resolved: {formatEpoch(start)} → {formatEpoch(end)} UTC · ~{totalChunks} chunk
-                {totalChunks === 1 ? "" : "s"}
-                {totalChunks > 0 && <> · est. {fmtEstimate(totalChunks)}</>}
-              </>
-            ) : (
-              <span className="text-danger">End must be after start.</span>
-            )}
-          </p>
-        </Section>
-
-        {/* 4. Filter builder */}
-        <Section title="Filter">
-          <div className="space-y-1.5 sm:col-span-2">
-            <Label>
-              Extraction Label / Search Name <span className="text-danger">*</span>
-            </Label>
-            <Input
-              ref={searchNameRef}
-              value={searchLabel}
-              onChange={(e) => setSearchLabel(e.target.value)}
-              placeholder="e.g. INVOICE_ABSCBN_NV"
-              required
-            />
-            {!searchLabel.trim() && (
-              <p className="text-xs text-danger">
-                Mandatory: every extraction requires a search name to name its output files.
-              </p>
-            )}
-          </div>
-
-          <div className="flex flex-wrap items-end gap-3 sm:col-span-2">
-            <div className="min-w-[220px] flex-1 space-y-1.5">
-              <Label>Load a saved search</Label>
-              <TemplatePicker
-                templates={templates ?? []}
-                value={templateId}
-                onPick={(v) => {
-                  setTemplateId(v);
-                  const tpl = templates?.find((t) => t.id === v);
-                  if (tpl) applyTemplate(tpl);
-                }}
-              />
-            </div>
-            {savingTemplate ? (
-              <>
-                <div className="min-w-[180px] space-y-1.5">
-                  <Label>Search name</Label>
-                  <Input
-                    ref={templateNameRef}
-                    autoFocus
-                    value={templateName}
-                    onChange={(e) => setTemplateName(e.target.value)}
-                    placeholder="India Entitlements SPID"
-                  />
-                </div>
-                <Button
-                  size="sm"
-                  disabled={!templateName.trim() || saveTemplate.isPending}
-                  onClick={startSaveAsSearch}
-                >
-                  {saveTemplate.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                  Save
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => setSavingTemplate(false)}>
-                  Cancel
-                </Button>
-              </>
-            ) : (
-              <Button
-                size="sm"
-                variant="outline"
-                // A parse pattern alone is worth saving — it is the laborious
-                // part, and it stands on its own without any filter.
-                // A customer is mandatory: it files the search's extracts.
-                disabled={!hasSomethingToSave || !customer.trim()}
-                onClick={() => {
-                  setTemplateName(searchLabel);
-                  setSavingTemplate(true);
-                }}
-                title={
-                  customer.trim()
-                    ? "Save the current filters and parse pattern as a reusable search"
-                    : "Enter a customer name first — saved searches are filed per customer"
-                }
-              >
-                <Bookmark className="h-3.5 w-3.5" />
-                Save as search
-              </Button>
-            )}
-            <div className="min-w-[180px] space-y-1.5">
-              <Label>
-                Customer <span className="text-danger">*</span>
-              </Label>
-              <Input
-                value={customer}
-                onChange={(e) => setCustomer(e.target.value)}
-                placeholder="ABSCBN"
-                required
-              />
-              {!customer.trim() && hasSomethingToSave && (
-                <p className="text-xs text-danger">Required to save this search.</p>
-              )}
-            </div>
-            {hasSomethingToSave && !savingTemplate && (
-              <p className="text-xs text-muted-foreground">Saves {savedParts.join(" + ")}.</p>
-            )}
-            {saveTemplate.isError && !saveConflict && !isDuplicateNameError(saveTemplate.error) && (
-              <p className="text-xs text-danger">{(saveTemplate.error as Error).message}</p>
-            )}
-          </div>
-
-          {saveConflict && (
-            <div
-              ref={conflictRef}
-              className="sm:col-span-2 border border-warning/40 bg-warning/10 p-3"
-            >
-              <p className="text-sm font-medium">Saved search name already exists</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                <strong>{saveConflict.existingName}</strong> is already saved.
-                {saveConflict.mode === "update"
-                  ? " You renamed this search to a name that another saved search already uses."
-                  : ""}
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Updating replaces that saved search&apos;s filter and parse pattern with the
-                settings currently on this screen.
-              </p>
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                {saveConflict.existingId != null && (
-                  <Button
-                    size="sm"
-                    onClick={() => resolveTemplateConflict.mutate(saveConflict)}
-                    disabled={resolveTemplateConflict.isPending}
-                  >
-                    {resolveTemplateConflict.isPending && (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    )}
-                    Update existing
-                  </Button>
+                  <option value="">Select a source…</option>
+                  {allIndexes?.map((i) => (
+                    <option key={i.id} value={i.id}>
+                      {i.name} · {i.region_code}
+                      {i.credential_label ? ` · ${i.credential_label}` : ""}
+                    </option>
+                  ))}
+                </select>
+                {selectedIndex && (
+                  <p className="text-xs text-muted-foreground">
+                    {selectedIndex.region_code} · index{" "}
+                    <span className="font-mono">
+                      {selectedIndex.physical_index ||
+                        (selectedIndex.full_index_string
+                          ? selectedIndex.name
+                          : "Default (org default)")}
+                    </span>
+                    {selectedIndex.credential_label ? (
+                      <> · credential {selectedIndex.credential_label}</>
+                    ) : null}
+                  </p>
                 )}
-                <Button size="sm" variant="outline" onClick={handleRenameConflict}>
-                  Rename
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => setSaveConflict(null)}>
-                  Cancel
-                </Button>
-              </div>
-              {saveConflict.existingId == null && (
-                <p className="mt-2 text-[11px] text-muted-foreground">
-                  The saved searches list is stale. Refresh the page to update the existing search,
-                  or choose Rename.
-                </p>
-              )}
-              {resolveTemplateConflict.isError && (
-                <p className="mt-2 text-xs text-danger">
-                  {(resolveTemplateConflict.error as Error).message}
-                </p>
-              )}
-            </div>
-          )}
-
-          <div className="space-y-2 sm:col-span-2">
-            <Label>Required words (all must appear, in any order)</Label>
-            <Input
-              value={phraseInput}
-              onChange={(e) => setPhraseInput(e.target.value)}
-              onBlur={commitPhraseInput}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  commitPhraseInput();
-                }
-              }}
-              placeholder={
-                'e.g. ClassName CGetEntitlementsCommand  ·  "API : 502" for an exact phrase'
-              }
-            />
-            <p className="text-xs text-muted-foreground">
-              Quote a phrase to require those tokens <strong>adjacent</strong> —{" "}
-              <span className="font-mono">&quot;API : 502&quot;</span>. Left unquoted, each word may
-              appear anywhere, so <span className="font-mono">502</span> would also match a
-              timestamp.
-            </p>
-            {(pendingWords.length > 0 || pending.exact.length > 0) && (
-              <p className="text-xs text-muted-foreground">
-                {[...pendingWords, ...pending.exact.map((p) => `"${p}"`)].join(" + ")} will be
-                included in this run.
-              </p>
-            )}
-            <div className="flex flex-wrap gap-1.5">
-              {phrases.map((p, i) => (
-                <span
-                  key={`w${i}`}
-                  className="inline-flex items-center gap-1 bg-muted px-2.5 py-0.5 text-xs"
-                >
-                  {p}
-                  <button
-                    type="button"
-                    onClick={() => setPhrases(phrases.filter((_, j) => j !== i))}
-                    aria-label={`Remove ${p}`}
+              </Field>
+              {/* The loaded search remembers where it was built — one click pulls
+              that source in, instead of re-picking it every time. */}
+              {(() => {
+                const loaded = templates?.find((t) => t.id === templateId);
+                const savedIdx = allIndexes?.find((i) => i.id === loaded?.index_target_id);
+                if (!loaded?.index_target_id || !savedIdx || savedIdx.id === indexId) return null;
+                return (
+                  <p className="text-xs text-muted-foreground sm:col-span-2">
+                    Saved with this search:{" "}
+                    <span className="font-medium text-foreground">
+                      {savedIdx.name} · {savedIdx.region_code}
+                    </span>{" "}
+                    <button
+                      type="button"
+                      className="text-primary underline"
+                      onClick={() => {
+                        setIndexId(savedIdx.id);
+                        setRegion(savedIdx.region_code);
+                        if (savedIdx.credential_id) setCredentialId(savedIdx.credential_id);
+                      }}
+                    >
+                      Use saved source
+                    </button>
+                  </p>
+                );
+              })()}
+              {/* Only asked for when the chosen source doesn't name a credential —
+              targets created before profiles existed. */}
+              {(!selectedIndex || !selectedIndex.credential_id) && (
+                <Field label="Credential" className="sm:col-span-2">
+                  <select
+                    className={fieldClass}
+                    value={credentialId}
+                    onChange={(e) => setCredentialId(e.target.value ? Number(e.target.value) : "")}
                   >
-                    <X className="h-3 w-3" />
-                  </button>
-                </span>
-              ))}
-              {exactPhrases.map((p, i) => (
-                <span
-                  key={`e${i}`}
-                  className="inline-flex items-center gap-1 border border-primary/40 bg-primary/10 px-2.5 py-0.5 font-mono text-xs text-primary"
-                  title="Exact phrase — these tokens must be adjacent"
-                >
-                  &quot;{p}&quot;
-                  <button
-                    type="button"
-                    onClick={() => setExactPhrases(exactPhrases.filter((_, j) => j !== i))}
-                    aria-label={`Remove exact phrase ${p}`}
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </span>
-              ))}
-            </div>
-          </div>
-
-          <div className="space-y-2 sm:col-span-2">
-            <Label>Must NOT contain (all must be absent, in any order)</Label>
-            <Input
-              value={excludeInput}
-              onChange={(e) => setExcludeInput(e.target.value)}
-              onBlur={commitExcludeInput}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  commitExcludeInput();
-                }
-              }}
-              placeholder={'e.g. healthcheck  ·  "API : 502" for an exact phrase'}
-            />
-            <p className="text-xs text-muted-foreground">
-              A log is excluded if any of these appears. Quote a phrase to exclude those tokens only
-              when <strong>adjacent</strong>.
-            </p>
-            {(pendingExclude.words.length > 0 || pendingExclude.exact.length > 0) && (
-              <p className="text-xs text-muted-foreground">
-                {[...pendingExclude.words, ...pendingExclude.exact.map((p) => `"${p}"`)].join(
-                  " + "
-                )}{" "}
-                will be excluded from this run.
-              </p>
-            )}
-            <div className="flex flex-wrap gap-1.5">
-              {excludePhrases.map((p, i) => (
-                <span
-                  key={`x${i}`}
-                  className="inline-flex items-center gap-1 border border-danger/40 bg-danger/10 px-2.5 py-0.5 text-xs text-danger"
-                >
-                  NOT {p}
-                  <button
-                    type="button"
-                    onClick={() => setExcludePhrases(excludePhrases.filter((_, j) => j !== i))}
-                    aria-label={`Remove excluded word ${p}`}
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </span>
-              ))}
-              {excludeExactPhrases.map((p, i) => (
-                <span
-                  key={`xe${i}`}
-                  className="inline-flex items-center gap-1 border border-danger/40 bg-danger/10 px-2.5 py-0.5 font-mono text-xs text-danger"
-                  title="Exclude only when these tokens are adjacent"
-                >
-                  NOT &quot;{p}&quot;
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setExcludeExactPhrases(excludeExactPhrases.filter((_, j) => j !== i))
-                    }
-                    aria-label={`Remove excluded exact phrase ${p}`}
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </span>
-              ))}
-            </div>
-          </div>
-
-          <div className="space-y-2 sm:col-span-2">
-            <div className="flex items-center justify-between">
-              <Label>Match any of these IDs (one per line)</Label>
-              <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-primary">
-                <Upload className="h-3.5 w-3.5" /> Upload .txt/.csv
-                <input type="file" accept=".txt,.csv" className="hidden" onChange={onUpload} />
-              </label>
-            </div>
-            <textarea
-              className={`${fieldClass} h-28 py-2`}
-              value={idsText}
-              onChange={(e) => setIdsText(e.target.value)}
-              placeholder="ID-AAA&#10;ID-BBB&#10;ID-CCC"
-            />
-            <p className="font-mono text-xs text-muted-foreground">
-              {ids.length} unique ID{ids.length === 1 ? "" : "s"} · {batches} batch
-              {batches === 1 ? "" : "es"} of {batchSize}
-            </p>
-          </div>
-
-          <div className="space-y-2 sm:col-span-2">
-            <Label>
-              Message types to extract{" "}
-              <span className="font-normal text-muted-foreground">(AND, optional)</span>
-            </Label>
-            <textarea
-              className={`${fieldClass} h-20 py-2`}
-              value={messageTypesText}
-              onChange={(e) => setMessageTypesText(e.target.value)}
-              placeholder={"GetEntitlementsResponseMessage\ngetEntitlements"}
-            />
-            <p className="font-mono text-xs text-muted-foreground">
-              Only logs containing these message types will be extracted. One per line.
-            </p>
-          </div>
-
-          <details className="sm:col-span-2">
-            <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
-              Advanced · generated pipeline JSON
-            </summary>
-            <pre className="mt-2 max-h-48 overflow-auto border border-border bg-background p-3 font-mono text-xs scrollbar-thin">
-              {pipeline ? JSON.stringify(pipeline, null, 2) : "(add a phrase or some IDs)"}
-            </pre>
-          </details>
-        </Section>
-
-        {/* 4b. Parse & aggregate */}
-        <Section title="Parse & aggregate (optional)">
-          <div className="flex flex-wrap items-center gap-3 sm:col-span-2">
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={aggEnabled}
-                onChange={(e) => setAggEnabled(e.target.checked)}
-                className="h-4 w-4"
-              />
-              Extract fields from each matched line
-            </label>
-            <Button type="button" size="sm" variant="outline" onClick={loadAggExample}>
-              Load example
-            </Button>
-          </div>
-          {!aggEnabled && (
-            <p className="text-xs text-muted-foreground sm:col-span-2">
-              Parsing is off — the raw export is exactly{" "}
-              <span className="font-mono">timestamp_utc</span> +{" "}
-              <span className="font-mono">message</span>. These settings are kept and apply as soon
-              as you turn parsing on.
-            </p>
-          )}
-
-          <fieldset disabled={!aggEnabled} className="contents">
-            <>
-              <AutoDetectPanel onApply={applyAutoDetect} />
-
-              {detectedFrom && (
-                <p className="text-[11px] text-muted-foreground sm:col-span-2">
-                  Pattern detected from <strong>{detectedFrom}</strong>. Edit the regex or the field
-                  boxes if the sample was not representative.
-                </p>
-              )}
-
-              <label className="flex items-start gap-2 text-sm sm:col-span-2">
-                <input
-                  type="checkbox"
-                  className="mt-1 h-4 w-4"
-                  checked={aggregateEnabled}
-                  onChange={(e) => setAggregateEnabled(e.target.checked)}
-                />
-                <span>
-                  Also aggregate: group and count distinct values
-                  <span className="block text-xs text-muted-foreground">
-                    On: counts unique values of the fields below. Off: parse only — every matched
-                    row&rsquo;s fields go to the CSV, but no counts are computed.
-                  </span>
-                </span>
-              </label>
-
-              <div className="space-y-2 sm:col-span-2">
-                <label className="flex items-start gap-2 text-sm">
-                  <input
-                    type="radio"
-                    className="mt-1"
-                    checked={!useLibrary}
-                    onChange={() => setUseLibrary(false)}
-                  />
-                  <span>
-                    One pattern for this job
-                    <span className="block text-xs text-muted-foreground">
-                      Every row is parsed by the regex below.
-                    </span>
-                  </span>
-                </label>
-                <label className="flex items-start gap-2 text-sm">
-                  <input
-                    type="radio"
-                    className="mt-1"
-                    checked={useLibrary}
-                    onChange={() => setUseLibrary(true)}
-                  />
-                  <span>
-                    Use the Log Formats library
-                    <span className="block text-xs text-muted-foreground">
-                      Each row is tried against every enabled format until one matches — for a
-                      stream carrying several log shapes. Manage them under{" "}
-                      <Link href="/log-formats" className="underline">
-                        Log formats
-                      </Link>
-                      .
-                    </span>
-                  </span>
-                </label>
-              </div>
-
-              {!useLibrary && (
-                <div className="space-y-1.5 sm:col-span-2">
-                  <Label>
-                    Regex with named groups{" "}
-                    <span className="font-normal text-muted-foreground">
-                      e.g. (?&lt;spid&gt;\d+) — pasted from Last9&rsquo;s Builder works as-is
-                    </span>
-                  </Label>
-                  <textarea
-                    className={`${fieldClass} h-20 py-2 font-mono text-xs`}
-                    value={aggRegex}
-                    onChange={(e) => setAggRegex(e.target.value)}
-                    placeholder="^\s*(?<trackerid>AHA-\d-[a-f0-9-]+)\s+-\s+ClassName\s+(?<api>\w+)\s+SPAccountId\s+(?<spid>\d+)..."
-                  />
-                </div>
-              )}
-              {aggregateEnabled ? (
-                <>
-                  <Field label="Group by (comma-separated field names)">
-                    <Input
-                      value={groupByText}
-                      onChange={(e) => setGroupByText(e.target.value)}
-                      placeholder="api, BU"
-                    />
-                  </Field>
-                  <Field label="Count unique values of (comma-separated)">
-                    <Input
-                      value={uniqueFieldsText}
-                      onChange={(e) => setUniqueFieldsText(e.target.value)}
-                      placeholder="spid, trackerid"
-                    />
-                  </Field>
-                  {overlappingFields.length > 0 && (
-                    <p className="text-xs text-danger sm:col-span-2">
-                      <strong>{overlappingFields.join(", ")}</strong> is in both boxes. Grouping by
-                      the field you&apos;re counting puts every value in its own group, so every
-                      count comes out as 1. Remove it from &ldquo;Group by&rdquo;.
+                    <option value="">Select a credential…</option>
+                    {credentials?.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.label} ({c.org_slug})
+                      </option>
+                    ))}
+                  </select>
+                  {selectedIndex && (
+                    <p className="text-xs text-muted-foreground">
+                      This source has no credential set — add one on the{" "}
+                      <Link href="/indexes" className="underline">
+                        Indexes
+                      </Link>{" "}
+                      page and it won&rsquo;t be asked for again.
                     </p>
                   )}
-                </>
-              ) : (
-                <p className="text-xs text-muted-foreground sm:col-span-2">
-                  Parse only — no group-by or counts. The fields you keep in the output editor below
-                  are written for every matched row.
-                </p>
+                </Field>
               )}
-              <div className="flex items-center gap-2 sm:col-span-2">
-                <input
-                  type="checkbox"
-                  id="skip-raw-output"
-                  checked={skipRawOutput}
-                  disabled={!aggregateEnabled}
-                  onChange={(e) => setSkipRawOutput(e.target.checked)}
-                  className="h-4 w-4"
-                />
-                <label htmlFor="skip-raw-output" className="text-sm">
-                  Summary only — skip writing the raw matched rows to a file
-                </label>
-              </div>
+            </StepGroup>
 
-              <div className="flex flex-wrap items-center gap-4 sm:col-span-2">
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={includeLogFormat}
-                    onChange={(e) => setIncludeLogFormat(e.target.checked)}
-                    className="h-4 w-4"
-                  />
-                  Include <span className="font-mono text-xs">log_format</span> column
-                </label>
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={includeMessageColumn}
-                    onChange={(e) => setIncludeMessageColumn(e.target.checked)}
-                    className="h-4 w-4"
-                  />
-                  Include <span className="font-mono text-xs">message</span> (the raw log line)
-                </label>
-              </div>
-
-              {/* The Save button is up in Filter; say so here, or the pattern
-                  looks like something you have to retype every time. */}
-              {aggRegex.trim() !== "" && (
-                <p className="text-xs text-muted-foreground sm:col-span-2">
-                  <Bookmark className="mr-1 inline h-3 w-3" />
-                  This pattern is kept by <strong>Save as search</strong> (in Filter, above), and
-                  comes back whenever you load that search — including on a schedule. It is also
-                  added to <strong>Log formats</strong> automatically so other searches can reuse
-                  it.
-                </p>
-              )}
-
+            {/* Time range */}
+            <StepGroup title="Time range">
               <div className="space-y-1.5 sm:col-span-2">
-                <Label>Test against a sample log line (optional)</Label>
-                <textarea
-                  className={`${fieldClass} h-16 py-2 font-mono text-xs`}
-                  value={sampleLine}
-                  onChange={(e) => setSampleLine(e.target.value)}
-                  placeholder="Paste one real log line to check the regex extracts what you expect"
+                <Label>Timezone</Label>
+                <div className="flex items-center gap-2">
+                  {(["UTC", "IST"] as Tz[]).map((z) => (
+                    <button
+                      key={z}
+                      type="button"
+                      onClick={() => setTz(z)}
+                      style={
+                        tz === z
+                          ? { backgroundColor: "#39c463", color: "#000", borderColor: "#39c463" }
+                          : {}
+                      }
+                      className={`border px-6 py-2 text-sm font-semibold transition-colors ${
+                        tz === z
+                          ? "border-transparent"
+                          : "border-border text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      {z}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 sm:col-span-2">
+                {PRESETS.map((p) => (
+                  <Button
+                    key={p.label}
+                    type="button"
+                    size="sm"
+                    variant={preset === p.seconds ? "primary" : "outline"}
+                    onClick={() => setPreset(p.seconds)}
+                  >
+                    {p.label}
+                  </Button>
+                ))}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={preset === "custom" ? "primary" : "outline"}
+                  onClick={() => setPreset("custom")}
+                >
+                  Custom
+                </Button>
+              </div>
+              {preset === "custom" && (
+                <>
+                  <Field label={`Start (${tz})`}>
+                    <Input
+                      type="datetime-local"
+                      value={customStart}
+                      onChange={(e) => setCustomStart(e.target.value)}
+                    />
+                  </Field>
+                  <Field label={`End (${tz})`}>
+                    <Input
+                      type="datetime-local"
+                      value={customEnd}
+                      onChange={(e) => setCustomEnd(e.target.value)}
+                    />
+                  </Field>
+                </>
+              )}
+              {recentRanges.length > 0 && (
+                <div className="sm:col-span-2">
+                  <p className="mb-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70">
+                    Recent
+                  </p>
+                  <div className="flex flex-col gap-0.5">
+                    {recentRanges.map((r, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        className="w-full border border-transparent px-2 py-1 text-left font-mono text-xs text-muted-foreground hover:border-border hover:text-foreground"
+                        onClick={() => {
+                          setPreset("custom");
+                          setTz(r.tz);
+                          setCustomStart(epochToLocal(r.start, r.tz));
+                          setCustomEnd(epochToLocal(r.end, r.tz));
+                        }}
+                      >
+                        {r.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <p className="font-mono text-xs text-muted-foreground sm:col-span-2">
+                {validRange ? (
+                  <>
+                    Resolved: {formatEpoch(start)} → {formatEpoch(end)} UTC · ~{totalChunks} chunk
+                    {totalChunks === 1 ? "" : "s"}
+                    {totalChunks > 0 && <> · est. {fmtEstimate(totalChunks)}</>}
+                  </>
+                ) : (
+                  <span className="text-danger">End must be after start.</span>
+                )}
+              </p>
+            </StepGroup>
+          </StepCard>
+
+          <StepCard n={2} active={step === 2}>
+            {/* Filter builder */}
+            <StepGroup>
+              <div className="space-y-1.5 sm:col-span-2">
+                <Label>
+                  Extraction Label / Search Name <span className="text-danger">*</span>
+                </Label>
+                <Input
+                  ref={searchNameRef}
+                  value={searchLabel}
+                  onChange={(e) => setSearchLabel(e.target.value)}
+                  placeholder="e.g. INVOICE_ABSCBN_NV"
+                  required
                 />
-                {sampleTest.error && <p className="text-xs text-danger">{sampleTest.error}</p>}
-                {sampleLine.trim() && !sampleTest.error && !sampleTest.groups && (
+                {!searchLabel.trim() && (
                   <p className="text-xs text-danger">
-                    No match — check the regex against this line.
+                    Mandatory: every extraction requires a search name to name its output files.
                   </p>
                 )}
               </div>
 
-              {/* Validate the output before spending a real "Test filter" run:
+              <div className="flex flex-wrap items-end gap-3 sm:col-span-2">
+                <div className="min-w-[220px] flex-1 space-y-1.5">
+                  <Label>Load a saved search</Label>
+                  <TemplatePicker
+                    templates={templates ?? []}
+                    value={templateId}
+                    onPick={(v) => {
+                      setTemplateId(v);
+                      const tpl = templates?.find((t) => t.id === v);
+                      if (tpl) applyTemplate(tpl);
+                    }}
+                  />
+                </div>
+                {savingTemplate ? (
+                  <>
+                    <div className="min-w-[180px] space-y-1.5">
+                      <Label>Search name</Label>
+                      <Input
+                        ref={templateNameRef}
+                        autoFocus
+                        value={templateName}
+                        onChange={(e) => setTemplateName(e.target.value)}
+                        placeholder="India Entitlements SPID"
+                      />
+                    </div>
+                    <Button
+                      size="sm"
+                      disabled={!templateName.trim() || saveTemplate.isPending}
+                      onClick={startSaveAsSearch}
+                    >
+                      {saveTemplate.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                      Save
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => setSavingTemplate(false)}>
+                      Cancel
+                    </Button>
+                  </>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    // A parse pattern alone is worth saving — it is the laborious
+                    // part, and it stands on its own without any filter.
+                    // A customer is mandatory: it files the search's extracts.
+                    disabled={!hasSomethingToSave || !customer.trim()}
+                    onClick={() => {
+                      setTemplateName(searchLabel);
+                      setSavingTemplate(true);
+                    }}
+                    title={
+                      customer.trim()
+                        ? "Save the current filters and parse pattern as a reusable search"
+                        : "Enter a customer name first — saved searches are filed per customer"
+                    }
+                  >
+                    <Bookmark className="h-3.5 w-3.5" />
+                    Save as search
+                  </Button>
+                )}
+                <div className="min-w-[180px] space-y-1.5">
+                  <Label>
+                    Customer <span className="text-danger">*</span>
+                  </Label>
+                  <Input
+                    value={customer}
+                    onChange={(e) => setCustomer(e.target.value)}
+                    placeholder="ABSCBN"
+                    required
+                  />
+                  {!customer.trim() && hasSomethingToSave && (
+                    <p className="text-xs text-danger">Required to save this search.</p>
+                  )}
+                </div>
+                {hasSomethingToSave && !savingTemplate && (
+                  <p className="text-xs text-muted-foreground">Saves {savedParts.join(" + ")}.</p>
+                )}
+                {saveTemplate.isError &&
+                  !saveConflict &&
+                  !isDuplicateNameError(saveTemplate.error) && (
+                    <p className="text-xs text-danger">{(saveTemplate.error as Error).message}</p>
+                  )}
+              </div>
+
+              {saveConflict && (
+                <div
+                  ref={conflictRef}
+                  className="sm:col-span-2 border border-warning/40 bg-warning/10 p-3"
+                >
+                  <p className="text-sm font-medium">Saved search name already exists</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    <strong>{saveConflict.existingName}</strong> is already saved.
+                    {saveConflict.mode === "update"
+                      ? " You renamed this search to a name that another saved search already uses."
+                      : ""}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Updating replaces that saved search&apos;s filter and parse pattern with the
+                    settings currently on this screen.
+                  </p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    {saveConflict.existingId != null && (
+                      <Button
+                        size="sm"
+                        onClick={() => resolveTemplateConflict.mutate(saveConflict)}
+                        disabled={resolveTemplateConflict.isPending}
+                      >
+                        {resolveTemplateConflict.isPending && (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        )}
+                        Update existing
+                      </Button>
+                    )}
+                    <Button size="sm" variant="outline" onClick={handleRenameConflict}>
+                      Rename
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => setSaveConflict(null)}>
+                      Cancel
+                    </Button>
+                  </div>
+                  {saveConflict.existingId == null && (
+                    <p className="mt-2 text-[11px] text-muted-foreground">
+                      The saved searches list is stale. Refresh the page to update the existing
+                      search, or choose Rename.
+                    </p>
+                  )}
+                  {resolveTemplateConflict.isError && (
+                    <p className="mt-2 text-xs text-danger">
+                      {(resolveTemplateConflict.error as Error).message}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              <div className="space-y-2 sm:col-span-2">
+                <Label>Required words (all must appear, in any order)</Label>
+                <Input
+                  value={phraseInput}
+                  onChange={(e) => setPhraseInput(e.target.value)}
+                  onBlur={commitPhraseInput}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      commitPhraseInput();
+                    }
+                  }}
+                  placeholder={
+                    'e.g. ClassName CGetEntitlementsCommand  ·  "API : 502" for an exact phrase'
+                  }
+                />
+                <p className="text-xs text-muted-foreground">
+                  Quote a phrase to require those tokens <strong>adjacent</strong> —{" "}
+                  <span className="font-mono">&quot;API : 502&quot;</span>. Left unquoted, each word
+                  may appear anywhere, so <span className="font-mono">502</span> would also match a
+                  timestamp.
+                </p>
+                {(pendingWords.length > 0 || pending.exact.length > 0) && (
+                  <p className="text-xs text-muted-foreground">
+                    {[...pendingWords, ...pending.exact.map((p) => `"${p}"`)].join(" + ")} will be
+                    included in this run.
+                  </p>
+                )}
+                <div className="flex flex-wrap gap-1.5">
+                  {phrases.map((p, i) => (
+                    <span
+                      key={`w${i}`}
+                      className="inline-flex items-center gap-1 bg-muted px-2.5 py-0.5 text-xs"
+                    >
+                      {p}
+                      <button
+                        type="button"
+                        onClick={() => setPhrases(phrases.filter((_, j) => j !== i))}
+                        aria-label={`Remove ${p}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </span>
+                  ))}
+                  {exactPhrases.map((p, i) => (
+                    <span
+                      key={`e${i}`}
+                      className="inline-flex items-center gap-1 border border-primary/40 bg-primary/10 px-2.5 py-0.5 font-mono text-xs text-primary"
+                      title="Exact phrase — these tokens must be adjacent"
+                    >
+                      &quot;{p}&quot;
+                      <button
+                        type="button"
+                        onClick={() => setExactPhrases(exactPhrases.filter((_, j) => j !== i))}
+                        aria-label={`Remove exact phrase ${p}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-2 sm:col-span-2">
+                <Label>Must NOT contain (all must be absent, in any order)</Label>
+                <Input
+                  value={excludeInput}
+                  onChange={(e) => setExcludeInput(e.target.value)}
+                  onBlur={commitExcludeInput}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      commitExcludeInput();
+                    }
+                  }}
+                  placeholder={'e.g. healthcheck  ·  "API : 502" for an exact phrase'}
+                />
+                <p className="text-xs text-muted-foreground">
+                  A log is excluded if any of these appears. Quote a phrase to exclude those tokens
+                  only when <strong>adjacent</strong>.
+                </p>
+                {(pendingExclude.words.length > 0 || pendingExclude.exact.length > 0) && (
+                  <p className="text-xs text-muted-foreground">
+                    {[...pendingExclude.words, ...pendingExclude.exact.map((p) => `"${p}"`)].join(
+                      " + "
+                    )}{" "}
+                    will be excluded from this run.
+                  </p>
+                )}
+                <div className="flex flex-wrap gap-1.5">
+                  {excludePhrases.map((p, i) => (
+                    <span
+                      key={`x${i}`}
+                      className="inline-flex items-center gap-1 border border-danger/40 bg-danger/10 px-2.5 py-0.5 text-xs text-danger"
+                    >
+                      NOT {p}
+                      <button
+                        type="button"
+                        onClick={() => setExcludePhrases(excludePhrases.filter((_, j) => j !== i))}
+                        aria-label={`Remove excluded word ${p}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </span>
+                  ))}
+                  {excludeExactPhrases.map((p, i) => (
+                    <span
+                      key={`xe${i}`}
+                      className="inline-flex items-center gap-1 border border-danger/40 bg-danger/10 px-2.5 py-0.5 font-mono text-xs text-danger"
+                      title="Exclude only when these tokens are adjacent"
+                    >
+                      NOT &quot;{p}&quot;
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExcludeExactPhrases(excludeExactPhrases.filter((_, j) => j !== i))
+                        }
+                        aria-label={`Remove excluded exact phrase ${p}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-2 sm:col-span-2">
+                <div className="flex items-center justify-between">
+                  <Label>Match any of these IDs (one per line)</Label>
+                  <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-primary">
+                    <Upload className="h-3.5 w-3.5" /> Upload .txt/.csv
+                    <input type="file" accept=".txt,.csv" className="hidden" onChange={onUpload} />
+                  </label>
+                </div>
+                <textarea
+                  className={`${fieldClass} h-28 py-2`}
+                  value={idsText}
+                  onChange={(e) => setIdsText(e.target.value)}
+                  placeholder="ID-AAA&#10;ID-BBB&#10;ID-CCC"
+                />
+                <p className="font-mono text-xs text-muted-foreground">
+                  {ids.length} unique ID{ids.length === 1 ? "" : "s"} · {batches} batch
+                  {batches === 1 ? "" : "es"} of {batchSize}
+                </p>
+              </div>
+
+              <div className="space-y-2 sm:col-span-2">
+                <Label>
+                  Message types to extract{" "}
+                  <span className="font-normal text-muted-foreground">(AND, optional)</span>
+                </Label>
+                <textarea
+                  className={`${fieldClass} h-20 py-2`}
+                  value={messageTypesText}
+                  onChange={(e) => setMessageTypesText(e.target.value)}
+                  placeholder={"GetEntitlementsResponseMessage\ngetEntitlements"}
+                />
+                <p className="font-mono text-xs text-muted-foreground">
+                  Only logs containing these message types will be extracted. One per line.
+                </p>
+              </div>
+
+              <details className="sm:col-span-2">
+                <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+                  Advanced · generated pipeline JSON
+                </summary>
+                <pre className="mt-2 max-h-48 overflow-auto border border-border bg-background p-3 font-mono text-xs scrollbar-thin">
+                  {pipeline ? JSON.stringify(pipeline, null, 2) : "(add a phrase or some IDs)"}
+                </pre>
+              </details>
+            </StepGroup>
+          </StepCard>
+
+          <StepCard n={3} active={step === 3}>
+            {/* Parse & aggregate */}
+            <StepGroup>
+              <div className="flex flex-wrap items-center gap-3 sm:col-span-2">
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={aggEnabled}
+                    onChange={(e) => setAggEnabled(e.target.checked)}
+                    className="h-4 w-4"
+                  />
+                  Extract fields from each matched line
+                </label>
+                <Button type="button" size="sm" variant="outline" onClick={loadAggExample}>
+                  Load example
+                </Button>
+              </div>
+              {!aggEnabled && (
+                <p className="text-xs text-muted-foreground sm:col-span-2">
+                  Parsing is off — the raw export is exactly{" "}
+                  <span className="font-mono">timestamp_utc</span> +{" "}
+                  <span className="font-mono">message</span>. These settings are kept and apply as
+                  soon as you turn parsing on.
+                </p>
+              )}
+
+              <fieldset disabled={!aggEnabled} className="contents">
+                <>
+                  <AutoDetectPanel onApply={applyAutoDetect} />
+
+                  {detectedFrom && (
+                    <p className="text-[11px] text-muted-foreground sm:col-span-2">
+                      Pattern detected from <strong>{detectedFrom}</strong>. Edit the regex or the
+                      field boxes if the sample was not representative.
+                    </p>
+                  )}
+
+                  <label className="flex items-start gap-2 text-sm sm:col-span-2">
+                    <input
+                      type="checkbox"
+                      className="mt-1 h-4 w-4"
+                      checked={aggregateEnabled}
+                      onChange={(e) => setAggregateEnabled(e.target.checked)}
+                    />
+                    <span>
+                      Also aggregate: group and count distinct values
+                      <span className="block text-xs text-muted-foreground">
+                        On: counts unique values of the fields below. Off: parse only — every
+                        matched row&rsquo;s fields go to the CSV, but no counts are computed.
+                      </span>
+                    </span>
+                  </label>
+
+                  <div className="space-y-2 sm:col-span-2">
+                    <label className="flex items-start gap-2 text-sm">
+                      <input
+                        type="radio"
+                        className="mt-1"
+                        checked={!useLibrary}
+                        onChange={() => setUseLibrary(false)}
+                      />
+                      <span>
+                        One pattern for this job
+                        <span className="block text-xs text-muted-foreground">
+                          Every row is parsed by the regex below.
+                        </span>
+                      </span>
+                    </label>
+                    <label className="flex items-start gap-2 text-sm">
+                      <input
+                        type="radio"
+                        className="mt-1"
+                        checked={useLibrary}
+                        onChange={() => setUseLibrary(true)}
+                      />
+                      <span>
+                        Use the Log Formats library
+                        <span className="block text-xs text-muted-foreground">
+                          Each row is tried against every enabled format until one matches — for a
+                          stream carrying several log shapes. Manage them under{" "}
+                          <Link href="/log-formats" className="underline">
+                            Log formats
+                          </Link>
+                          .
+                        </span>
+                      </span>
+                    </label>
+                  </div>
+
+                  {!useLibrary && (
+                    <div className="space-y-1.5 sm:col-span-2">
+                      <Label>
+                        Regex with named groups{" "}
+                        <span className="font-normal text-muted-foreground">
+                          e.g. (?&lt;spid&gt;\d+) — pasted from Last9&rsquo;s Builder works as-is
+                        </span>
+                      </Label>
+                      <textarea
+                        className={`${fieldClass} h-20 py-2 font-mono text-xs`}
+                        value={aggRegex}
+                        onChange={(e) => setAggRegex(e.target.value)}
+                        placeholder="^\s*(?<trackerid>AHA-\d-[a-f0-9-]+)\s+-\s+ClassName\s+(?<api>\w+)\s+SPAccountId\s+(?<spid>\d+)..."
+                      />
+                    </div>
+                  )}
+                  {aggregateEnabled ? (
+                    <>
+                      <Field label="Group by (comma-separated field names)">
+                        <Input
+                          value={groupByText}
+                          onChange={(e) => setGroupByText(e.target.value)}
+                          placeholder="api, BU"
+                        />
+                      </Field>
+                      <Field label="Count unique values of (comma-separated)">
+                        <Input
+                          value={uniqueFieldsText}
+                          onChange={(e) => setUniqueFieldsText(e.target.value)}
+                          placeholder="spid, trackerid"
+                        />
+                      </Field>
+                      {overlappingFields.length > 0 && (
+                        <p className="text-xs text-danger sm:col-span-2">
+                          <strong>{overlappingFields.join(", ")}</strong> is in both boxes. Grouping
+                          by the field you&apos;re counting puts every value in its own group, so
+                          every count comes out as 1. Remove it from &ldquo;Group by&rdquo;.
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-xs text-muted-foreground sm:col-span-2">
+                      Parse only — no group-by or counts. The fields you keep in the output editor
+                      below are written for every matched row.
+                    </p>
+                  )}
+                  <div className="flex items-center gap-2 sm:col-span-2">
+                    <input
+                      type="checkbox"
+                      id="skip-raw-output"
+                      checked={skipRawOutput}
+                      disabled={!aggregateEnabled}
+                      onChange={(e) => setSkipRawOutput(e.target.checked)}
+                      className="h-4 w-4"
+                    />
+                    <label htmlFor="skip-raw-output" className="text-sm">
+                      Summary only — skip writing the raw matched rows to a file
+                    </label>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-4 sm:col-span-2">
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={includeLogFormat}
+                        onChange={(e) => setIncludeLogFormat(e.target.checked)}
+                        className="h-4 w-4"
+                      />
+                      Include <span className="font-mono text-xs">log_format</span> column
+                    </label>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={includeMessageColumn}
+                        onChange={(e) => setIncludeMessageColumn(e.target.checked)}
+                        className="h-4 w-4"
+                      />
+                      Include <span className="font-mono text-xs">message</span> (the raw log line)
+                    </label>
+                  </div>
+
+                  {/* The Save button is up in Filter; say so here, or the pattern
+                  looks like something you have to retype every time. */}
+                  {aggRegex.trim() !== "" && (
+                    <p className="text-xs text-muted-foreground sm:col-span-2">
+                      <Bookmark className="mr-1 inline h-3 w-3" />
+                      This pattern is kept by <strong>Save as search</strong> (in Filter, above),
+                      and comes back whenever you load that search — including on a schedule. It is
+                      also added to <strong>Log formats</strong> automatically so other searches can
+                      reuse it.
+                    </p>
+                  )}
+
+                  <div className="space-y-1.5 sm:col-span-2">
+                    <Label>Test against a sample log line (optional)</Label>
+                    <textarea
+                      className={`${fieldClass} h-16 py-2 font-mono text-xs`}
+                      value={sampleLine}
+                      onChange={(e) => setSampleLine(e.target.value)}
+                      placeholder="Paste one real log line to check the regex extracts what you expect"
+                    />
+                    {sampleTest.error && <p className="text-xs text-danger">{sampleTest.error}</p>}
+                    {sampleLine.trim() && !sampleTest.error && !sampleTest.groups && (
+                      <p className="text-xs text-danger">
+                        No match — check the regex against this line.
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Validate the output before spending a real "Test filter" run:
                   every parsed field with its sequence number and uniform
                   header (independent of group_by/unique_fields — those keep
                   driving the aggregation either way), and a preview of the
                   exact row that choice produces. */}
-              {regexFields.length > 0 && (
-                <div className="space-y-3 border-t border-border pt-3 sm:col-span-2">
-                  <OutputColumnsEditor
-                    fields={regexFields}
-                    included={includedFields}
-                    seq={colSeq}
-                    labels={colLabels}
-                    defaults={colDefaults}
-                    timestampColumn={timestampHeader}
-                    sampleValues={sampleTest.groups}
-                    onToggle={toggleIncludedField}
-                    onSeq={(f, v) =>
-                      setColSeq((prev) => {
-                        if (v === null) {
-                          const next = { ...prev };
-                          delete next[f];
-                          return next;
+                  {regexFields.length > 0 && (
+                    <div className="space-y-3 border-t border-border pt-3 sm:col-span-2">
+                      <OutputColumnsEditor
+                        fields={regexFields}
+                        included={includedFields}
+                        seq={colSeq}
+                        labels={colLabels}
+                        defaults={colDefaults}
+                        timestampColumn={timestampHeader}
+                        sampleValues={sampleTest.groups}
+                        onToggle={toggleIncludedField}
+                        onSeq={(f, v) =>
+                          setColSeq((prev) => {
+                            if (v === null) {
+                              const next = { ...prev };
+                              delete next[f];
+                              return next;
+                            }
+                            return { ...prev, [f]: v };
+                          })
                         }
-                        return { ...prev, [f]: v };
-                      })
-                    }
-                    onLabel={(f, v) =>
-                      setColLabels((prev) => {
-                        const next = { ...prev };
-                        if (v.trim() === "") delete next[f];
-                        else next[f] = v;
-                        return next;
-                      })
-                    }
-                    onDefault={(f, v) =>
-                      setColDefaults((prev) => {
-                        const next = { ...prev };
-                        if (v === "") delete next[f];
-                        else next[f] = v;
-                        return next;
-                      })
-                    }
-                    onTimestampColumn={setTimestampHeader}
-                    onApplyUniform={applyUniformLayout}
-                  />
-
-                  <div className="space-y-1.5">
-                    <Label>Output row preview</Label>
-                    {sampleTest.groups || useLibrary ? (
-                      <div className="overflow-auto border border-border">
-                        <table className="w-full text-left text-xs">
-                          <thead className="bg-muted text-muted-foreground">
-                            <tr>
-                              <th className="px-2 py-1 font-medium">
-                                {timestampHeader.trim() || "timestamp"}
-                              </th>
-                              {includeLogFormat && (
-                                <th className="px-2 py-1 font-medium">log_format</th>
-                              )}
-                              {orderedIncludedFields.map((f) => (
-                                <th key={f} className="px-2 py-1 font-mono font-medium">
-                                  {(colLabels[f] ?? "").trim() || f}
-                                </th>
-                              ))}
-                              {includeMessageColumn && (
-                                <th className="px-2 py-1 font-medium">message</th>
-                              )}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            <tr className="border-t border-border">
-                              <td className="px-2 py-1 text-muted-foreground">(submitted time)</td>
-                              {includeLogFormat && (
-                                <td className="px-2 py-1 text-muted-foreground">(this pattern)</td>
-                              )}
-                              {orderedIncludedFields.map((f) => (
-                                <td key={f} className="px-2 py-1 font-mono">
-                                  {sampleTest.groups?.[f] ?? colDefaults[f] ?? ""}
-                                </td>
-                              ))}
-                              {includeMessageColumn && (
-                                <td className="px-2 py-1 font-mono">{sampleLine}</td>
-                              )}
-                            </tr>
-                          </tbody>
-                        </table>
-                      </div>
-                    ) : (
-                      <p className="text-xs text-muted-foreground">
-                        Paste a sample log line above to preview the output row.
-                      </p>
-                    )}
-                  </div>
-
-                  {aggregateEnabled && uniqueFields.length === 0 && (
-                    <p className="text-xs text-danger">
-                      Pick at least one field to count unique values of, above.
-                    </p>
-                  )}
-
-                  {/* Save right here once the preview looks right — no need to
-                      come back after Test filter / Run and redo this. */}
-                  <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
-                    {templateId !== "" ? (
-                      <Button
-                        type="button"
-                        size="sm"
-                        disabled={
-                          !aggValid ||
-                          !customer.trim() ||
-                          !searchLabel.trim() ||
-                          updateExistingTemplate.isPending
+                        onLabel={(f, v) =>
+                          setColLabels((prev) => {
+                            const next = { ...prev };
+                            if (v.trim() === "") delete next[f];
+                            else next[f] = v;
+                            return next;
+                          })
                         }
-                        onClick={startSaveExistingChanges}
-                        title={customer.trim() ? undefined : "Enter a customer name first"}
-                      >
-                        {updateExistingTemplate.isPending ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        onDefault={(f, v) =>
+                          setColDefaults((prev) => {
+                            const next = { ...prev };
+                            if (v === "") delete next[f];
+                            else next[f] = v;
+                            return next;
+                          })
+                        }
+                        onTimestampColumn={setTimestampHeader}
+                        onApplyUniform={applyUniformLayout}
+                      />
+
+                      <div className="space-y-1.5">
+                        <Label>Output row preview</Label>
+                        {sampleTest.groups || useLibrary ? (
+                          <div className="overflow-auto border border-border">
+                            <table className="w-full text-left text-xs">
+                              <thead className="bg-muted text-muted-foreground">
+                                <tr>
+                                  <th className="px-2 py-1 font-medium">
+                                    {timestampHeader.trim() || "timestamp"}
+                                  </th>
+                                  {includeLogFormat && (
+                                    <th className="px-2 py-1 font-medium">log_format</th>
+                                  )}
+                                  {orderedIncludedFields.map((f) => (
+                                    <th key={f} className="px-2 py-1 font-mono font-medium">
+                                      {(colLabels[f] ?? "").trim() || f}
+                                    </th>
+                                  ))}
+                                  {includeMessageColumn && (
+                                    <th className="px-2 py-1 font-medium">message</th>
+                                  )}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                <tr className="border-t border-border">
+                                  <td className="px-2 py-1 text-muted-foreground">
+                                    (submitted time)
+                                  </td>
+                                  {includeLogFormat && (
+                                    <td className="px-2 py-1 text-muted-foreground">
+                                      (this pattern)
+                                    </td>
+                                  )}
+                                  {orderedIncludedFields.map((f) => (
+                                    <td key={f} className="px-2 py-1 font-mono">
+                                      {sampleTest.groups?.[f] ?? colDefaults[f] ?? ""}
+                                    </td>
+                                  ))}
+                                  {includeMessageColumn && (
+                                    <td className="px-2 py-1 font-mono">{sampleLine}</td>
+                                  )}
+                                </tr>
+                              </tbody>
+                            </table>
+                          </div>
                         ) : (
-                          <Check className="h-3.5 w-3.5" />
+                          <p className="text-xs text-muted-foreground">
+                            Paste a sample log line above to preview the output row.
+                          </p>
                         )}
-                        Save changes to &ldquo;
-                        {searchLabel.trim() || templates?.find((t) => t.id === templateId)?.name}
-                        &rdquo;
-                      </Button>
-                    ) : (
-                      <p className="text-xs text-muted-foreground">
-                        Looks right? <strong>Save as search</strong> (in Filter, above) keeps this
-                        exact output config — load it again any time instead of rebuilding it.
-                      </p>
-                    )}
-                    {updateExistingTemplate.isSuccess && !updateExistingTemplate.isPending && (
-                      <span className="text-xs text-success">Saved.</span>
-                    )}
-                    {updateExistingTemplate.isError &&
-                      !saveConflict &&
-                      !isDuplicateNameError(updateExistingTemplate.error) && (
+                      </div>
+
+                      {aggregateEnabled && uniqueFields.length === 0 && (
                         <p className="text-xs text-danger">
-                          {(updateExistingTemplate.error as Error).message}
+                          Pick at least one field to count unique values of, above.
                         </p>
                       )}
-                  </div>
-                </div>
-              )}
-            </>
-          </fieldset>
-        </Section>
 
-        {/* 5. Options */}
-        <Section title="Options">
-          <Field label="Chunk hours">
-            <Input
-              type="number"
-              min={1}
-              value={chunkHours}
-              onChange={(e) => setChunkHours(Math.max(1, Number(e.target.value)))}
-            />
-          </Field>
-          <Field label="ID batch size">
-            <Input
-              type="number"
-              min={1}
-              value={batchSize}
-              onChange={(e) => setBatchSize(Math.max(1, Number(e.target.value)))}
-            />
-          </Field>
-          <Field label="Output format">
-            <select
-              className={fieldClass}
-              value={format}
-              onChange={(e) => setFormat(e.target.value as "csv" | "jsonl" | "bigquery")}
-            >
-              <option value="csv">CSV</option>
-              <option value="jsonl">JSONL (one JSON object per line)</option>
-              <option value="bigquery">BigQuery CSV (6-column)</option>
-            </select>
-          </Field>
-          <Field label="S3 destination (optional)">
-            <select
-              className={fieldClass}
-              value={s3ProfileId}
-              onChange={(e) => setS3ProfileId(e.target.value ? Number(e.target.value) : "")}
-            >
-              <option value="">No S3 upload — local download only</option>
-              {s3Profiles?.map((profile) => (
-                <option key={profile.id} value={profile.id}>
-                  {profile.name} · {profile.bucket}
-                  {profile.prefix ? `/${profile.prefix}` : ""}
-                </option>
-              ))}
-            </select>
-            <p className="text-xs text-muted-foreground">
-              Uploads raw, summary, and counts artifacts when the run completes. Saved searches keep
-              this choice for scheduled runs.
-            </p>
-            {s3Profiles && s3Profiles.length === 0 && (
-              <p className="text-xs text-muted-foreground">
-                No S3 profiles yet.{" "}
-                <Link href="/s3-profiles" className="text-primary hover:underline">
-                  Add one
-                </Link>
-                .
+                      {/* Save right here once the preview looks right — no need to
+                      come back after Test filter / Run and redo this. */}
+                      <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
+                        {templateId !== "" ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            disabled={
+                              !aggValid ||
+                              !customer.trim() ||
+                              !searchLabel.trim() ||
+                              updateExistingTemplate.isPending
+                            }
+                            onClick={startSaveExistingChanges}
+                            title={customer.trim() ? undefined : "Enter a customer name first"}
+                          >
+                            {updateExistingTemplate.isPending ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Check className="h-3.5 w-3.5" />
+                            )}
+                            Save changes to &ldquo;
+                            {searchLabel.trim() ||
+                              templates?.find((t) => t.id === templateId)?.name}
+                            &rdquo;
+                          </Button>
+                        ) : (
+                          <p className="text-xs text-muted-foreground">
+                            Looks right? <strong>Save as search</strong> (in Filter, above) keeps
+                            this exact output config — load it again any time instead of rebuilding
+                            it.
+                          </p>
+                        )}
+                        {updateExistingTemplate.isSuccess && !updateExistingTemplate.isPending && (
+                          <span className="text-xs text-success">Saved.</span>
+                        )}
+                        {updateExistingTemplate.isError &&
+                          !saveConflict &&
+                          !isDuplicateNameError(updateExistingTemplate.error) && (
+                            <p className="text-xs text-danger">
+                              {(updateExistingTemplate.error as Error).message}
+                            </p>
+                          )}
+                      </div>
+                    </div>
+                  )}
+                </>
+              </fieldset>
+            </StepGroup>
+          </StepCard>
+
+          <StepCard n={4} active={step === 4}>
+            {/* Options */}
+            <StepGroup>
+              <Field label="Chunk hours">
+                <Input
+                  type="number"
+                  min={1}
+                  value={chunkHours}
+                  onChange={(e) => setChunkHours(Math.max(1, Number(e.target.value)))}
+                />
+              </Field>
+              <Field label="ID batch size">
+                <Input
+                  type="number"
+                  min={1}
+                  value={batchSize}
+                  onChange={(e) => setBatchSize(Math.max(1, Number(e.target.value)))}
+                />
+              </Field>
+              <Field label="Output format">
+                <select
+                  className={fieldClass}
+                  value={format}
+                  onChange={(e) => setFormat(e.target.value as "csv" | "jsonl" | "bigquery")}
+                >
+                  <option value="csv">CSV</option>
+                  <option value="jsonl">JSONL (one JSON object per line)</option>
+                  <option value="bigquery">BigQuery CSV (6-column)</option>
+                </select>
+              </Field>
+              <Field label="S3 destination (optional)">
+                <select
+                  className={fieldClass}
+                  value={s3ProfileId}
+                  onChange={(e) => setS3ProfileId(e.target.value ? Number(e.target.value) : "")}
+                >
+                  <option value="">No S3 upload — local download only</option>
+                  {s3Profiles?.map((profile) => (
+                    <option key={profile.id} value={profile.id}>
+                      {profile.name} · {profile.bucket}
+                      {profile.prefix ? `/${profile.prefix}` : ""}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-muted-foreground">
+                  Uploads raw, summary, and counts artifacts when the run completes. Saved searches
+                  keep this choice for scheduled runs.
+                </p>
+                {s3Profiles && s3Profiles.length === 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    No S3 profiles yet.{" "}
+                    <Link href="/s3-profiles" className="text-primary hover:underline">
+                      Add one
+                    </Link>
+                    .
+                  </p>
+                )}
+              </Field>
+            </StepGroup>
+          </StepCard>
+
+          <StepCard n={5} active={step === 5}>
+            {reviewBlockers.length > 0 ? (
+              <div className="border border-warning/40 bg-warning/10 p-3">
+                <p className="text-sm font-medium">A few things still need attention</p>
+                <ul className="mt-1.5 space-y-1">
+                  {reviewBlockers.map((b) => (
+                    <li
+                      key={b.text}
+                      className="flex items-center justify-between gap-3 text-xs text-muted-foreground"
+                    >
+                      <span>{b.text}</span>
+                      <button
+                        type="button"
+                        className="shrink-0 text-primary hover:underline"
+                        onClick={() => goToStep(b.to)}
+                      >
+                        Fix
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              <p className="border border-success/40 bg-success/10 p-3 text-sm">
+                Everything checks out. Test the filter on a small sample first, or run the full
+                window.
               </p>
             )}
-          </Field>
-        </Section>
-      </div>
 
-      {/* 6. Review & run — pinned to the viewport bottom so it is always at
-          hand on a form that now spans columns. */}
-      <div className="sticky bottom-0 z-10 -mx-4 mt-3 flex items-center justify-end gap-3 border-t border-border bg-background/95 px-4 py-2 backdrop-blur">
-        {create.isError && <p className="text-xs text-danger">{(create.error as Error).message}</p>}
-        <Button
-          variant="outline"
-          disabled={!canRun || create.isPending}
-          onClick={() => create.mutate(true)}
-          title="Sample the newest part of the window, capped at 100 rows - to validate the filter"
-        >
-          Test filter
-        </Button>
-        <Button disabled={!canRun || create.isPending} onClick={() => create.mutate(false)}>
-          {create.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
-          Run extraction
-        </Button>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <ReviewBlock title="Source" onEdit={() => goToStep(1)}>
+                <p className="font-medium">{selectedIndex?.name ?? "Not chosen"}</p>
+                <p className="text-xs text-muted-foreground">
+                  {selectedIndex
+                    ? `${selectedIndex.region_code} · ${
+                        selectedIndex.physical_index || selectedIndex.name
+                      }`
+                    : "Pick a source in step 1."}
+                </p>
+                <p className="text-xs text-muted-foreground">Credential: {credentialLabel}</p>
+              </ReviewBlock>
+
+              <ReviewBlock title="Window" onEdit={() => goToStep(1)}>
+                <p className="font-mono text-xs">
+                  {validRange
+                    ? `${formatEpoch(start)} → ${formatEpoch(end)} UTC`
+                    : "End must be after start"}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {totalChunks} chunk{totalChunks === 1 ? "" : "s"} · ~{fmtEstimate(totalChunks)} ·{" "}
+                  {tz}
+                </p>
+              </ReviewBlock>
+
+              <ReviewBlock title="Filter" onEdit={() => goToStep(2)}>
+                <p className="font-medium">{searchLabel.trim() || "Unnamed extraction"}</p>
+                <p className="text-xs text-muted-foreground">
+                  Customer: {customer.trim() || "not set"} · {positiveCount} required ·{" "}
+                  {exclusionCount} excluded · {ids.length} IDs · {messageTypes.length} message types
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {requiredPreview.length > 0
+                    ? `${requiredPreview.slice(0, 6).join(" · ")}${
+                        requiredPreview.length > 6 ? ` · +${requiredPreview.length - 6} more` : ""
+                      }`
+                    : "No required words"}
+                </p>
+                {exclusionPreview.length > 0 && (
+                  <p className="text-xs text-danger">
+                    {exclusionPreview.slice(0, 4).join(" · ")}
+                    {exclusionPreview.length > 4 ? ` · +${exclusionPreview.length - 4} more` : ""}
+                  </p>
+                )}
+              </ReviewBlock>
+
+              <ReviewBlock title="Parse & output" onEdit={() => goToStep(3)}>
+                <p className="font-medium">
+                  {!aggEnabled
+                    ? "Parsing off — timestamp_utc + message"
+                    : useLibrary
+                      ? "Log Formats library"
+                      : `${regexFields.length} field${regexFields.length === 1 ? "" : "s"}`}
+                </p>
+                {aggEnabled && (
+                  <p className="text-xs text-muted-foreground">
+                    {aggregateEnabled
+                      ? `Group by ${groupBy.join(", ") || "—"} · count ${uniqueFields.join(", ") || "—"}`
+                      : "Parse only — no group-by or counts"}
+                  </p>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  {format === "bigquery" ? "BigQuery CSV" : format.toUpperCase()} · {s3Label}
+                </p>
+              </ReviewBlock>
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              <strong>Test filter</strong> samples the newest part of the window (up to 100 rows)
+              and writes nothing to the final export. <strong>Run extraction</strong> processes all{" "}
+              {totalChunks} chunk{totalChunks === 1 ? "" : "s"}.
+            </p>
+          </StepCard>
+
+          {/* Pinned to the bottom of the viewport: whichever step is open, the
+              next action is in the same place. */}
+          <div className="sticky bottom-0 z-10 mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border bg-background/95 py-3 backdrop-blur">
+            <p className="text-xs text-muted-foreground">
+              {step < 5
+                ? (stepBlocker[step] ?? `Step ${step} of ${STEPS.length} · ${stepMeta.label}`)
+                : canRun
+                  ? "Ready to run."
+                  : "Some settings still need attention."}
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              {step > 1 && (
+                <Button variant="outline" onClick={() => goToStep((step - 1) as StepNumber)}>
+                  <ArrowLeft className="h-4 w-4" />
+                  Back
+                </Button>
+              )}
+              {step < 5 ? (
+                <Button disabled={!canContinue} onClick={() => goToStep((step + 1) as StepNumber)}>
+                  Continue
+                  <ArrowRight className="h-4 w-4" />
+                </Button>
+              ) : (
+                <>
+                  {create.isError && (
+                    <p className="text-xs text-danger">{(create.error as Error).message}</p>
+                  )}
+                  <Button
+                    variant="outline"
+                    disabled={!canRun || create.isPending}
+                    onClick={() => create.mutate(true)}
+                    title="Sample the newest part of the window, capped at 100 rows - to validate the filter"
+                  >
+                    Test filter
+                  </Button>
+                  <Button
+                    disabled={!canRun || create.isPending}
+                    onClick={() => create.mutate(false)}
+                  >
+                    {create.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
+                    Run extraction
+                  </Button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function StepCard({
+  n,
+  active,
+  children,
+}: {
+  n: StepNumber;
+  active: boolean;
+  children: React.ReactNode;
+}) {
+  const meta = STEPS.find((s) => s.n === n) ?? STEPS[0];
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-foreground">{title}</CardTitle>
-      </CardHeader>
-      <CardContent className="grid grid-cols-1 gap-3 sm:grid-cols-2">{children}</CardContent>
-    </Card>
+    <section hidden={!active} aria-label={meta.label} className="animate-fade-in">
+      <Card>
+        <CardHeader className="border-b border-border/60 pb-4">
+          <div className="flex items-start gap-3">
+            <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center border border-border bg-muted font-mono text-xs text-muted-foreground">
+              {n}
+            </span>
+            <div className="min-w-0">
+              <CardTitle className="text-base font-semibold text-foreground">
+                {meta.label}
+              </CardTitle>
+              <p className="mt-0.5 text-xs text-muted-foreground">{meta.description}</p>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-5 p-5">{children}</CardContent>
+      </Card>
+    </section>
+  );
+}
+
+function StepGroup({
+  title,
+  children,
+  className,
+}: {
+  title?: string;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className="space-y-3">
+      {title && <h3 className="text-sm font-semibold text-foreground">{title}</h3>}
+      <div className={`grid grid-cols-1 gap-3 sm:grid-cols-2 ${className ?? ""}`}>{children}</div>
+    </div>
+  );
+}
+
+function ReviewBlock({
+  title,
+  onEdit,
+  children,
+}: {
+  title: string;
+  onEdit: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="border border-border/70 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          {title}
+        </p>
+        <button type="button" className="text-xs text-primary hover:underline" onClick={onEdit}>
+          Edit
+        </button>
+      </div>
+      <div className="mt-1.5 space-y-0.5">{children}</div>
+    </div>
   );
 }
 
