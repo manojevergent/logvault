@@ -17,6 +17,7 @@ from app.routers import (
     comparisons,
     credentials,
     customers,
+    groups,
     health,
     indexes,
     jobs,
@@ -82,6 +83,7 @@ app.include_router(s3_profiles.router, dependencies=_auth_dep)
 app.include_router(indexes.router, dependencies=_auth_dep)
 app.include_router(jobs.router, dependencies=_auth_dep)
 app.include_router(jobs.public_router)  # /download (signed URL) + /progress (SSE) do their own auth
+app.include_router(groups.router, dependencies=_auth_dep)
 app.include_router(comparisons.router, dependencies=_auth_dep)
 app.include_router(schedules.router, dependencies=_auth_dep)
 app.include_router(labels.router, dependencies=_auth_dep)

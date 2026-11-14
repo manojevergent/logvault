@@ -264,6 +264,7 @@ export type AggregationResult = {
 
 export type Job = {
   id: number;
+  group_id?: number | null;
   status: JobStatus;
   region_code: string;
   index_target_id: number;
@@ -1228,3 +1229,48 @@ export const updateReportSettings = (retention_days: number) =>
     method: "PUT",
     body: JSON.stringify({ retention_days }),
   });
+
+// -- group extractions -------------------------------------------------------
+
+export type GroupStatus = "queued" | "running" | "completed" | "partial" | "failed" | "canceled";
+
+export type GroupSummary = {
+  id: number;
+  name: string;
+  status: GroupStatus;
+  created_by: string | null;
+  created_at: string;
+  start_epoch: number;
+  end_epoch: number;
+  is_preview: boolean;
+  parent_group_id: number | null;
+  total_jobs: number;
+  completed: number;
+  failed: number;
+  canceled: number;
+  running: number;
+  queued: number;
+  rows_written: number;
+};
+
+export type GroupDetail = GroupSummary & { jobs: Job[] };
+
+export type GroupInput = {
+  name: string;
+  items: { template_id: number }[];
+  start_epoch: number;
+  end_epoch: number;
+  chunk_hours?: number;
+  id_batch_size?: number;
+  output_format?: "csv" | "jsonl";
+  is_preview?: boolean;
+};
+
+export const listGroups = (limit = 50) => req<GroupSummary[]>(`/groups?limit=${limit}`);
+export const getGroup = (id: number) => req<GroupDetail>(`/groups/${id}`);
+export const createGroup = (body: GroupInput) =>
+  req<GroupDetail>("/groups", { method: "POST", body: JSON.stringify(body) });
+export const cancelGroup = (id: number) =>
+  req<GroupDetail>(`/groups/${id}/cancel`, { method: "POST" });
+export const retryGroup = (id: number) =>
+  req<GroupDetail>(`/groups/${id}/retry`, { method: "POST" });

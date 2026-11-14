@@ -25,6 +25,7 @@ from app.database import SessionLocal, get_db
 from app.deps import get_current_user
 from app.format_registry import register_aggregation_pattern
 from app.models import (
+    ExtractionGroup,
     FilterTemplate,
     IndexTarget,
     Job,
@@ -223,6 +224,7 @@ def _new_job_row(
     s3_profile_id: int | None,
     s3_destination: dict | None,
     created_by: str | None,
+    group_id: int | None = None,
 ) -> Job:
     filter_spec: dict = {
         "phrases": phrases,
@@ -256,6 +258,7 @@ def _new_job_row(
         # everything created here, so nothing recorded who ran an extraction —
         # and the worker's failure net tripped over the None.
         created_by=created_by,
+        group_id=group_id,
     )
 
 
@@ -332,30 +335,17 @@ def create_job(
 MAX_BATCH_ITEMS = 50
 
 
-@router.post("/batch", response_model=list[JobOut], status_code=status.HTTP_201_CREATED)
-def create_batch(
-    body: BatchCreate,
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-) -> list[JobOut]:
-    """Run several saved searches over one shared window — one job per search,
-    each file named `<search>_<job id>_<window>`. All-or-nothing: every entry
-    is validated before the first job queues, so a bad template or a deleted
-    credential fails the request instead of half the batch."""
-    if not body.items:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "at least one search is required")
-    if len(body.items) > MAX_BATCH_ITEMS:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            f"at most {MAX_BATCH_ITEMS} searches per batch",
-        )
-    if body.end_epoch <= body.start_epoch:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "end must be after start")
+def _resolve_batch_plans(
+    db: Session, items
+) -> list[tuple[FilterTemplate, dict | None, int, int, str, S3Profile | None]]:
+    """Validate every selected search and pin its source before anything runs.
 
-    # (template, aggregation, resolved credential/index/region). Resolved once
-    # here so validation and creation can't disagree about the source.
+    Shared by the legacy /jobs/batch endpoint and the first-class group launch;
+    resolving once is what keeps validation and job creation from disagreeing
+    about which index a search runs against.
+    """
     plans: list[tuple[FilterTemplate, dict | None, int, int, str, S3Profile | None]] = []
-    for item in body.items:
+    for item in items:
         tpl = db.get(FilterTemplate, item.template_id)
         if tpl is None:
             raise HTTPException(
@@ -388,6 +378,51 @@ def create_batch(
         _validate_agg_dict(agg)
         s3_profile = s3.profile_or_422(db, tpl.s3_profile_id)
         plans.append((tpl, agg, credential_id, index_target_id, region_code, s3_profile))
+    return plans
+
+
+@router.post("/batch", response_model=list[JobOut], status_code=status.HTTP_201_CREATED)
+def create_batch(
+    body: BatchCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[JobOut]:
+    """Run several saved searches over one shared window — one job per search,
+    each file named `<search>_<job id>_<window>`. All-or-nothing: every entry
+    is validated before the first job queues, so a bad template or a deleted
+    credential fails the request instead of half the batch."""
+    if not body.items:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "at least one search is required")
+    if len(body.items) > MAX_BATCH_ITEMS:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"at most {MAX_BATCH_ITEMS} searches per batch",
+        )
+    if body.end_epoch <= body.start_epoch:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "end must be after start")
+
+    # (template, aggregation, resolved credential/index/region). Resolved once
+    # here so validation and creation can't disagree about the source.
+    plans = _resolve_batch_plans(db, body.items)
+
+    # The batch is also a group, so it can be tracked/canceled/retried as one
+    # unit later. One-search batches (the quick-run button on a saved search)
+    # stay plain jobs: they are not a group worth listing.
+    group: ExtractionGroup | None = None
+    if len(plans) > 1:
+        group = ExtractionGroup(
+            name=f"{'Preview' if body.is_preview else 'Batch'} · {len(plans)} searches · "
+            f"{datetime.now(UTC):%d %b %Y %H:%M} UTC",
+            created_by=user.email,
+            start_epoch=body.start_epoch,
+            end_epoch=body.end_epoch,
+            chunk_hours=body.chunk_hours,
+            id_batch_size=body.id_batch_size,
+            output_format=body.output_format,
+            is_preview=body.is_preview,
+        )
+        db.add(group)
+        db.flush()
 
     jobs = [
         _new_job_row(
@@ -412,6 +447,7 @@ def create_batch(
             s3_profile_id=s3_profile.id if s3_profile else None,
             s3_destination=s3.destination_snapshot(s3_profile),
             created_by=user.email,
+            group_id=group.id if group else None,
         )
         for tpl, agg, credential_id, index_target_id, region_code, s3_profile in plans
     ]
@@ -620,6 +656,7 @@ def create_rollup(
 # deserializing the whole document on every poll.
 _LIST_COLUMNS = (
     Job.id,
+    Job.group_id,
     Job.status,
     Job.region_code,
     Job.index_target_id,
@@ -669,6 +706,7 @@ def _row_to_out(row, credential_label: str | None) -> JobOut:
     }
     out = JobOut(
         id=row["id"],
+        group_id=row["group_id"],
         status=row["status"],
         region_code=row["region_code"],
         index_target_id=row["index_target_id"],

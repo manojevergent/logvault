@@ -365,6 +365,7 @@ class JobOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    group_id: int | None = None
     status: JobStatus
     region_code: str
     index_target_id: int
@@ -457,7 +458,7 @@ class BatchItem(BaseModel):
 
 
 class BatchCreate(BaseModel):
-    """Run several saved searches over the same window — e.g. month-end, when
+    """Run several saved searches over the same window - e.g. month-end, when
     every invoice search extracts the same 24h. One job per item, created
     atomically: any invalid entry 422s the whole batch before anything queues.
     """
@@ -469,6 +470,39 @@ class BatchCreate(BaseModel):
     id_batch_size: int = 100
     output_format: Literal["csv", "jsonl"] = "csv"
     is_preview: bool = False
+
+
+GroupStatus = Literal["queued", "running", "completed", "partial", "failed", "canceled"]
+
+
+class GroupCreate(BatchCreate):
+    """A named group extraction. Identical selection/window rules as a batch;
+    the name is what the operator sees on the Groups page."""
+
+    name: str = ""
+
+
+class GroupSummary(BaseModel):
+    id: int
+    name: str
+    status: GroupStatus
+    created_by: str | None
+    created_at: datetime
+    start_epoch: int
+    end_epoch: int
+    is_preview: bool
+    parent_group_id: int | None = None
+    total_jobs: int
+    completed: int
+    failed: int
+    canceled: int
+    running: int
+    queued: int
+    rows_written: int
+
+
+class GroupDetail(GroupSummary):
+    jobs: list[JobOut]
 
 
 class RollupCreate(BaseModel):

@@ -8,6 +8,7 @@ import {
   CalendarClock,
   CloudUpload,
   KeyRound,
+  Layers,
   LayoutDashboard,
   ListChecks,
   Database,
@@ -38,6 +39,7 @@ const primaryNav: NavItem[] = [
   { href: "/customers", label: "Customers", icon: Users },
   { href: "/reports", label: "Reports", icon: BarChart3 },
   { href: "/jobs/new", label: "New extraction", icon: PlusCircle },
+  { href: "/groups", label: "Group extraction", icon: Layers },
   { href: "/schedules", label: "Schedules", icon: CalendarClock },
   { href: "/compare", label: "Compare", icon: ArrowLeftRight },
 ];

@@ -366,6 +366,14 @@ export default function JobDetailPage() {
             </h1>
             <Badge tone={JOB_TONE[status as keyof typeof JOB_TONE] ?? "neutral"}>{status}</Badge>
             {job.is_preview && <Badge tone="warning">preview</Badge>}
+            {job.group_id != null && (
+              <Link
+                href={`/groups/${job.group_id}`}
+                className="text-xs text-primary hover:underline"
+              >
+                Group #{job.group_id}
+              </Link>
+            )}
           </div>
           <p className="font-mono text-xs text-muted-foreground">
             {searchName && <>Job #{job.id} · </>}

@@ -46,6 +46,9 @@ class Job(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
+    # Optional group: one launch of several saved searches, one job per search.
+    # Null for ordinary single extractions. Indexed for the group detail query.
+    group_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     region_code: Mapped[str] = mapped_column(String(40))
     index_target_id: Mapped[int] = mapped_column(Integer)
     credential_id: Mapped[int] = mapped_column(Integer)
@@ -146,6 +149,27 @@ class Schedule(Base):
     bq_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# One launch of several saved searches over one shared window. The group is the
+# unit an operator tracks: it owns no extraction logic itself, only the shared
+# window/settings and the id its jobs point at. Status and counts are derived
+# from those jobs so they cannot drift from the actual run.
+class ExtractionGroup(Base):
+    __tablename__ = "extraction_groups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(160))
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    start_epoch: Mapped[int] = mapped_column(BigInteger)
+    end_epoch: Mapped[int] = mapped_column(BigInteger)
+    chunk_hours: Mapped[int] = mapped_column(Integer, default=1)
+    id_batch_size: Mapped[int] = mapped_column(Integer, default=100)
+    output_format: Mapped[str] = mapped_column(String(10), default="csv")
+    is_preview: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Set when a group was created by "retry failed" on another group.
+    parent_group_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
 
 
 # A named parse pattern. Jobs try every enabled format against each row until
