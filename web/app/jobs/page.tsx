@@ -14,6 +14,7 @@ import {
   X,
 } from "lucide-react";
 import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import * as React from "react";
 import { ImportJsonButton } from "@/components/import-json-button";
 import { Badge } from "@/components/ui/badge";
@@ -33,7 +34,14 @@ import {
   listJobs,
 } from "@/lib/api";
 import { isActive } from "@/lib/use-jobs";
-import { Tz, formatDuration, formatEpoch, formatRange, formatRangeCompact, useTz } from "@/lib/time";
+import {
+  Tz,
+  formatDuration,
+  formatEpoch,
+  formatRange,
+  formatRangeCompact,
+  useTz,
+} from "@/lib/time";
 
 type Tab = "all" | "previews" | JobStatus;
 
@@ -59,11 +67,54 @@ function extractionName(job: Job): string | null {
 }
 
 export default function JobsPage() {
-  const [search, setSearch] = React.useState("");
-  const [tab, setTab] = React.useState<Tab>("all");
+  return (
+    <React.Suspense
+      fallback={<div className="px-4 py-6 text-sm text-muted-foreground">Loading jobs…</div>}
+    >
+      <JobsPageContent />
+    </React.Suspense>
+  );
+}
+
+function JobsPageContent() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const initialTab = (() => {
+    const value = searchParams.get("tab");
+    return value && STATUS_TABS.includes(value as Tab) ? (value as Tab) : "all";
+  })();
+  const [search, setSearch] = React.useState(() => searchParams.get("q") ?? "");
+  const [tab, setTab] = React.useState<Tab>(initialTab);
   const [tz, setTz] = useTz();
   const searchRef = React.useRef<HTMLInputElement>(null);
   const qc = useQueryClient();
+  const paramsString = searchParams.toString();
+
+  // Keep the list shareable and backend/forward-safe: tab and text live in the
+  // URL. The sync below handles a dashboard/badge link or the back button; the
+  // debounced writer avoids a history entry per keystroke.
+  React.useEffect(() => {
+    const params = new URLSearchParams(paramsString);
+    const rawTab = params.get("tab");
+    const nextTab = rawTab && STATUS_TABS.includes(rawTab as Tab) ? (rawTab as Tab) : "all";
+    const nextSearch = params.get("q") ?? "";
+    setTab((current) => (current === nextTab ? current : nextTab));
+    setSearch((current) => (current === nextSearch ? current : nextSearch));
+  }, [paramsString]);
+
+  React.useEffect(() => {
+    const timer = setTimeout(() => {
+      const params = new URLSearchParams();
+      if (tab !== "all") params.set("tab", tab);
+      if (search.trim()) params.set("q", search.trim());
+      const query = params.toString();
+      const target = query ? `${pathname}?${query}` : pathname;
+      if (window.location.pathname + window.location.search === target) return;
+      router.replace(target, { scroll: false });
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [search, tab, pathname, router]);
 
   // Previews are a separate dataset (every "Test filter" click is a job row),
   // selected by tab rather than filtered out of a mixed list.
@@ -195,10 +246,7 @@ export default function JobsPage() {
   }, [jobs, search]);
 
   // Tab counts come from the server aggregate, not from the loaded page.
-  const counts = React.useMemo(
-    () => stats?.by_status ?? {},
-    [stats]
-  );
+  const counts = React.useMemo(() => stats?.by_status ?? {}, [stats]);
   const tabTotal =
     tab === "all"
       ? (stats?.total ?? 0)
@@ -208,10 +256,7 @@ export default function JobsPage() {
 
   // "Select all" only ever touches the cancelable rows in the current
   // filtered view — a completed job never gets swept in by it.
-  const cancelableInView = React.useMemo(
-    () => (filtered ?? []).filter(isActive),
-    [filtered]
-  );
+  const cancelableInView = React.useMemo(() => (filtered ?? []).filter(isActive), [filtered]);
   const allInViewSelected =
     cancelableInView.length > 0 && cancelableInView.every((j) => selected.has(j.id));
 
@@ -437,27 +482,31 @@ export default function JobsPage() {
       )}
 
       {/* Empty tab or empty search — keep the tab, offer the way back. */}
-      {!error && !isLoading && jobs && jobs.length === 0 && !((stats?.total ?? 0) === 0 && tab === "all") && (
-        <div className="flex flex-col items-center gap-2 py-8 text-center">
-          <p className="text-sm text-muted-foreground">
-            {search.trim()
-              ? "No loaded jobs match this search."
-              : tab === "previews"
-                ? "No previews yet — “Test filter” runs appear here."
-                : `No ${tab} jobs.`}
-          </p>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => {
-              setSearch("");
-              setTab("all");
-            }}
-          >
-            Clear filters
-          </Button>
-        </div>
-      )}
+      {!error &&
+        !isLoading &&
+        jobs &&
+        jobs.length === 0 &&
+        !((stats?.total ?? 0) === 0 && tab === "all") && (
+          <div className="flex flex-col items-center gap-2 py-8 text-center">
+            <p className="text-sm text-muted-foreground">
+              {search.trim()
+                ? "No loaded jobs match this search."
+                : tab === "previews"
+                  ? "No previews yet — “Test filter” runs appear here."
+                  : `No ${tab} jobs.`}
+            </p>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setSearch("");
+                setTab("all");
+              }}
+            >
+              Clear filters
+            </Button>
+          </div>
+        )}
 
       {filtered && filtered.length === 0 && jobs && jobs.length > 0 && (
         <div className="flex flex-col items-center gap-2 py-8 text-center">
@@ -726,7 +775,10 @@ const JobRow = React.memo(function JobRow({
             title="Export config as JSON"
             className="h-6 w-6"
             onClick={async () =>
-              downloadJson(`${job.filter_spec?.label || `job_${job.id}`}.json`, await exportJob(job.id))
+              downloadJson(
+                `${job.filter_spec?.label || `job_${job.id}`}.json`,
+                await exportJob(job.id)
+              )
             }
           >
             <FileDown className="h-3.5 w-3.5" />

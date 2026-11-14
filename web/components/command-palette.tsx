@@ -1,15 +1,26 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Bookmark, CalendarClock, Database, FileText } from "lucide-react";
+import {
+  BarChart3,
+  Bookmark,
+  CalendarClock,
+  Database,
+  FileText,
+  Layers,
+  PlusCircle,
+  Users,
+} from "lucide-react";
 import { useRouter } from "next/navigation";
 import * as React from "react";
 import { fieldClass } from "@/components/ui/input";
 import {
   FilterTemplate,
+  GroupSummary,
   IndexTarget,
   Job,
   Schedule,
+  listGroups,
   listIndexes,
   listSchedules,
   listTemplates,
@@ -26,6 +37,106 @@ type Hit = {
   sub: string;
   href: string;
 };
+
+const CREATE_HITS: Hit[] = [
+  {
+    key: "create-extraction",
+    group: "Create",
+    label: "New extraction",
+    sub: "action",
+    href: "/jobs/new",
+  },
+  {
+    key: "create-group",
+    group: "Create",
+    label: "New group extraction",
+    sub: "action",
+    href: "/groups/new",
+  },
+];
+
+const PAGE_HITS: Hit[] = [
+  { key: "page-reports", group: "Go to", label: "Reports", sub: "page", href: "/reports" },
+  {
+    key: "page-groups",
+    group: "Go to",
+    label: "Group extractions",
+    sub: "page",
+    href: "/groups",
+  },
+  { key: "page-jobs", group: "Go to", label: "Jobs", sub: "page", href: "/jobs" },
+  {
+    key: "page-customers",
+    group: "Go to",
+    label: "Customers",
+    sub: "page",
+    href: "/customers",
+  },
+  {
+    key: "page-schedules",
+    group: "Go to",
+    label: "Schedules",
+    sub: "page",
+    href: "/schedules",
+  },
+  {
+    key: "page-templates",
+    group: "Go to",
+    label: "Saved searches",
+    sub: "page",
+    href: "/templates",
+  },
+  {
+    key: "page-formats",
+    group: "Go to",
+    label: "Log formats",
+    sub: "page",
+    href: "/log-formats",
+  },
+  { key: "page-indexes", group: "Go to", label: "Indexes", sub: "page", href: "/indexes" },
+  {
+    key: "page-credentials",
+    group: "Go to",
+    label: "Credentials",
+    sub: "page",
+    href: "/credentials",
+  },
+  {
+    key: "page-compare",
+    group: "Go to",
+    label: "Compare",
+    sub: "page",
+    href: "/compare",
+  },
+  {
+    key: "page-newrelic",
+    group: "Go to",
+    label: "New Relic",
+    sub: "page",
+    href: "/new-relic",
+  },
+  {
+    key: "page-s3",
+    group: "Go to",
+    label: "S3 destinations",
+    sub: "page",
+    href: "/s3-profiles",
+  },
+  {
+    key: "page-admin",
+    group: "Go to",
+    label: "Admin",
+    sub: "page",
+    href: "/admin",
+  },
+  {
+    key: "page-settings",
+    group: "Go to",
+    label: "Settings",
+    sub: "page",
+    href: "/settings",
+  },
+];
 
 function matchWords(hay: string, q: string): boolean {
   return q
@@ -108,6 +219,11 @@ export function CommandPalette() {
     queryFn: listSchedules,
     enabled: open,
   });
+  const { data: groupList } = useQuery({
+    queryKey: ["groups", "palette"],
+    queryFn: () => listGroups(50),
+    enabled: open,
+  });
 
   React.useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -136,11 +252,15 @@ export function CommandPalette() {
       setActiveKey(null);
       requestAnimationFrame(() => inputRef.current?.focus());
     }
-  }, [open ]);
+  }, [open]);
 
   const groups = React.useMemo(() => {
     const q = query.trim();
     const keep = (hay: string) => !q || matchWords(hay, q);
+
+    const createHits = CREATE_HITS.filter((hit) => keep(`${hit.label} ${hit.sub}`));
+    const pageHits = PAGE_HITS.filter((hit) => keep(`${hit.label} ${hit.sub}`));
+
     const jobHits: Hit[] = (jobs ?? [])
       .filter((j: Job) => keep(`${j.id} ${j.filter_spec?.label ?? ""} ${j.status}`))
       .slice(0, PER_GROUP)
@@ -161,6 +281,31 @@ export function CommandPalette() {
         sub: t.customer ?? "",
         href: "/templates",
       }));
+    const groupHits: Hit[] = (groupList ?? [])
+      .filter((g: GroupSummary) => keep(`${g.name} ${g.status}`))
+      .slice(0, PER_GROUP)
+      .map((g) => ({
+        key: `grp-${g.id}`,
+        group: "Groups",
+        label: g.name,
+        sub: g.status,
+        href: `/groups/${g.id}`,
+      }));
+    const customerHits: Hit[] = [];
+    const seenCustomers = new Set<string>();
+    for (const job of jobs ?? []) {
+      const customer = job.filter_spec?.customer?.trim();
+      if (!customer || seenCustomers.has(customer) || !keep(customer)) continue;
+      seenCustomers.add(customer);
+      customerHits.push({
+        key: `cust-${customer}`,
+        group: "Customers",
+        label: customer,
+        sub: "customer",
+        href: `/jobs?q=${encodeURIComponent(customer)}`,
+      });
+      if (customerHits.length >= PER_GROUP) break;
+    }
     const idxHits: Hit[] = (indexes ?? [])
       .filter((i: IndexTarget) => keep(`${i.name} ${i.region_code}`))
       .slice(0, PER_GROUP)
@@ -181,13 +326,18 @@ export function CommandPalette() {
         sub: s.enabled ? "on" : "off",
         href: "/schedules",
       }));
+
     return [
+      { title: "Create", icon: <PlusCircle className="h-3 w-3" />, hits: createHits },
+      { title: "Go to", icon: <BarChart3 className="h-3 w-3" />, hits: pageHits },
       { title: "Jobs", icon: <FileText className="h-3 w-3" />, hits: jobHits },
       { title: "Saved searches", icon: <Bookmark className="h-3 w-3" />, hits: tplHits },
+      { title: "Groups", icon: <Layers className="h-3 w-3" />, hits: groupHits },
+      { title: "Customers", icon: <Users className="h-3 w-3" />, hits: customerHits },
       { title: "Indexes", icon: <Database className="h-3 w-3" />, hits: idxHits },
       { title: "Schedules", icon: <CalendarClock className="h-3 w-3" />, hits: schHits },
     ];
-  }, [jobs, templates, indexes, schedules, query]);
+  }, [jobs, templates, indexes, schedules, groupList, query]);
 
   const flat = React.useMemo(() => groups.flatMap((g) => g.hits), [groups]);
   const total = flat.length;
@@ -224,18 +374,22 @@ export function CommandPalette() {
                 e.preventDefault();
                 const next = flat[(i + 1) % flat.length];
                 setActiveKey(next.key);
-                document.getElementById(`palette-${next.key}`)?.scrollIntoView({ block: "nearest" });
+                document
+                  .getElementById(`palette-${next.key}`)
+                  ?.scrollIntoView({ block: "nearest" });
               } else if (e.key === "ArrowUp") {
                 e.preventDefault();
                 const prev = flat[(i - 1 + flat.length) % flat.length];
                 setActiveKey(prev.key);
-                document.getElementById(`palette-${prev.key}`)?.scrollIntoView({ block: "nearest" });
+                document
+                  .getElementById(`palette-${prev.key}`)
+                  ?.scrollIntoView({ block: "nearest" });
               } else if (e.key === "Enter") {
                 e.preventDefault();
                 go(flat[Math.max(i, 0)]);
               }
             }}
-            placeholder="Search jobs, saved searches, indexes, schedules…"
+            placeholder="Search anything — jobs, groups, customers, searches…"
             aria-label="Global search"
             className={cn(fieldClass, "h-11 border-0 text-sm shadow-none focus-visible:ring-0")}
           />

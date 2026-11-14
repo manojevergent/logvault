@@ -66,9 +66,27 @@ export default function DashboardPage() {
       {/* Stat cards with 3D colored icon badges. auto-rows-fr keeps the health
           card exactly the same height as its neighbours on every breakpoint. */}
       <div className="grid auto-rows-fr grid-cols-2 gap-2.5 lg:grid-cols-4">
-        <StatCard icon={ListChecks} color="blue" label="Active jobs" value={activeCount ?? "—"} />
-        <StatCard icon={Database} color="yellow" label="Saved indexes" value={indexes.length} />
-        <StatCard icon={KeyRound} color="red" label="Credentials" value={creds.length} />
+        <StatCard
+          icon={ListChecks}
+          color="blue"
+          label="Active jobs"
+          value={activeCount ?? "-"}
+          href="/jobs?tab=running"
+        />
+        <StatCard
+          icon={Database}
+          color="yellow"
+          label="Saved indexes"
+          value={indexes.length}
+          href="/indexes"
+        />
+        <StatCard
+          icon={KeyRound}
+          color="red"
+          label="Credentials"
+          value={creds.length}
+          href="/credentials"
+        />
         <SystemHealthCard />
       </div>
 
@@ -144,10 +162,15 @@ export default function DashboardPage() {
             <ul className="space-y-1 text-xs">
               {segments.length === 0 && <li className="text-muted-foreground">No jobs yet</li>}
               {segments.map((s) => (
-                <li key={s.label} className="flex items-center gap-2">
-                  <span className="h-2.5 w-2.5 rounded-full" style={{ background: s.color }} />
-                  <span className="capitalize text-muted-foreground">{s.label}</span>
-                  <span className="font-mono font-medium">{s.value}</span>
+                <li key={s.label}>
+                  <Link
+                    href={`/jobs?tab=${encodeURIComponent(s.label)}`}
+                    className="flex items-center gap-2 text-muted-foreground hover:text-foreground"
+                  >
+                    <span className="h-2.5 w-2.5 rounded-full" style={{ background: s.color }} />
+                    <span className="capitalize">{s.label}</span>
+                    <span className="font-mono font-medium">{s.value}</span>
+                  </Link>
                 </li>
               ))}
             </ul>
@@ -180,13 +203,15 @@ function StatCard({
   color,
   label,
   value,
+  href,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   color: "blue" | "green" | "yellow" | "red";
   label: string;
   value: number | string;
+  href?: string;
 }) {
-  return (
+  const card = (
     <Card>
       <CardContent className="flex items-center gap-3 p-3.5">
         <IconBadge icon={icon} color={color} size="sm" />
@@ -198,6 +223,12 @@ function StatCard({
         </div>
       </CardContent>
     </Card>
+  );
+  if (!href) return card;
+  return (
+    <Link href={href} className="block" aria-label={`${label}: ${value}`}>
+      {card}
+    </Link>
   );
 }
 

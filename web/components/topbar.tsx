@@ -42,7 +42,7 @@ export function Topbar({ onMenu }: { onMenu?: () => void }) {
         >
           <Search className="h-3.5 w-3.5 shrink-0" />
           <span className="truncate text-xs">
-            <span className="hidden sm:inline">Search jobs, saved searches…</span>
+            <span className="hidden sm:inline">Search anything…</span>
             <span className="sm:hidden">Search…</span>
           </span>
           <kbd className="ml-2 hidden rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] sm:inline">

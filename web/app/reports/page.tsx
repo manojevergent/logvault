@@ -11,6 +11,7 @@ import {
   Trash2,
 } from "lucide-react";
 import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import * as React from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Badge } from "@/components/ui/badge";
@@ -380,13 +381,44 @@ function AlertRow({ alert }: { alert: ReportAlert }) {
 }
 
 export default function ReportsPage() {
+  return (
+    <React.Suspense
+      fallback={<div className="px-4 py-6 text-sm text-muted-foreground">Loading reports…</div>}
+    >
+      <ReportsPageContent />
+    </React.Suspense>
+  );
+}
+
+function ReportsPageContent() {
   const qc = useQueryClient();
-  const [windowDays, setWindowDays] = React.useState(30);
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const [windowDays, setWindowDays] = React.useState(() => {
+    const value = Number(searchParams.get("days"));
+    return Number.isFinite(value) && value > 0 ? value : 30;
+  });
+  const paramsString = searchParams.toString();
   const [retentionInput, setRetentionInput] = React.useState("90");
   const [isAdmin, setIsAdmin] = React.useState(false);
   const [removeTarget, setRemoveTarget] = React.useState<ReportSchedule | null>(null);
 
   React.useEffect(() => setIsAdmin(getRole() === "admin"), []);
+
+  // The selected window is shareable, e.g. /reports?days=14. Retention still
+  // caps it; the writer below stores the clamped value.
+  React.useEffect(() => {
+    const raw = Number(new URLSearchParams(paramsString).get("days"));
+    const next = Number.isFinite(raw) && raw > 0 ? raw : 30;
+    setWindowDays((current) => (current === next ? current : next));
+  }, [paramsString]);
+
+  React.useEffect(() => {
+    const target = windowDays === 30 ? pathname : `${pathname}?days=${windowDays}`;
+    if (window.location.pathname + window.location.search === target) return;
+    router.replace(target, { scroll: false });
+  }, [windowDays, pathname, router]);
 
   const settingsQ = useQuery({ queryKey: ["report-settings"], queryFn: getReportSettings });
   const reportQ = useQuery({
