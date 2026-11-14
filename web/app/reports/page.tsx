@@ -8,9 +8,11 @@ import {
   Loader2,
   RefreshCw,
   Settings2,
+  Trash2,
 } from "lucide-react";
 import Link from "next/link";
 import * as React from "react";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,6 +23,7 @@ import {
   ReportDay,
   ReportDayStatus,
   ReportSchedule,
+  deleteSchedule,
   getReport,
   getReportSettings,
   getRole,
@@ -212,7 +215,7 @@ function DayStrip({ days }: { days: ReportDay[] }) {
   );
 }
 
-function ScheduleRow({ schedule }: { schedule: ReportSchedule }) {
+function ScheduleRow({ schedule, onRemove }: { schedule: ReportSchedule; onRemove: () => void }) {
   return (
     <div className="border border-border/70 p-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -228,14 +231,28 @@ function ScheduleRow({ schedule }: { schedule: ReportSchedule }) {
             {fmtWhen(schedule.last_run_at)}
           </p>
         </div>
-        {schedule.latest_job_id != null && (
-          <Link
-            href={`/jobs/${schedule.latest_job_id}`}
-            className="shrink-0 text-xs text-primary hover:underline"
-          >
-            Latest job #{schedule.latest_job_id}
-          </Link>
-        )}
+        <div className="flex shrink-0 items-center gap-2">
+          {schedule.latest_job_id != null && (
+            <Link
+              href={`/jobs/${schedule.latest_job_id}`}
+              className="text-xs text-primary hover:underline"
+            >
+              Latest job #{schedule.latest_job_id}
+            </Link>
+          )}
+          {schedule.schedule_id != null && (
+            <Button
+              size="icon"
+              variant="ghost"
+              aria-label={`Remove report for ${schedule.name}`}
+              title="Remove this schedule from reports"
+              onClick={onRemove}
+              className="h-7 w-7 text-muted-foreground hover:text-danger"
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
       </div>
 
       <div className="mt-2 grid grid-cols-3 gap-2">
@@ -261,7 +278,13 @@ function ScheduleRow({ schedule }: { schedule: ReportSchedule }) {
   );
 }
 
-function CustomerCard({ customer }: { customer: ReportCustomer }) {
+function CustomerCard({
+  customer,
+  onRemove,
+}: {
+  customer: ReportCustomer;
+  onRemove: (schedule: ReportSchedule) => void;
+}) {
   return (
     <Card className="mb-3">
       <CardHeader className="flex flex-wrap items-start justify-between gap-2 border-b border-border/60 pb-3">
@@ -302,6 +325,7 @@ function CustomerCard({ customer }: { customer: ReportCustomer }) {
           <ScheduleRow
             key={`${schedule.schedule_id ?? "removed"}-${schedule.name}-${index}`}
             schedule={schedule}
+            onRemove={() => onRemove(schedule)}
           />
         ))}
       </CardContent>
@@ -360,6 +384,7 @@ export default function ReportsPage() {
   const [windowDays, setWindowDays] = React.useState(30);
   const [retentionInput, setRetentionInput] = React.useState("90");
   const [isAdmin, setIsAdmin] = React.useState(false);
+  const [removeTarget, setRemoveTarget] = React.useState<ReportSchedule | null>(null);
 
   React.useEffect(() => setIsAdmin(getRole() === "admin"), []);
 
@@ -388,6 +413,20 @@ export default function ReportsPage() {
       if (windowDays > saved.retention_days) setWindowDays(saved.retention_days);
     },
   });
+
+  const removeSchedule = useMutation({
+    mutationFn: (id: number) => deleteSchedule(id),
+    onSuccess: () => {
+      setRemoveTarget(null);
+      qc.invalidateQueries({ queryKey: ["report"] });
+      qc.invalidateQueries({ queryKey: ["schedules"] });
+    },
+  });
+
+  function askRemove(schedule: ReportSchedule) {
+    removeSchedule.reset();
+    setRemoveTarget(schedule);
+  }
 
   const windowOptions = React.useMemo(() => {
     const values = new Set(WINDOWS.filter((days) => days <= retention));
@@ -637,7 +676,7 @@ export default function ReportsPage() {
             </Card>
           ) : (
             data.customers.map((customer) => (
-              <CustomerCard key={customer.customer} customer={customer} />
+              <CustomerCard key={customer.customer} customer={customer} onRemove={askRemove} />
             ))
           )}
 
@@ -669,6 +708,41 @@ export default function ReportsPage() {
           </p>
         </>
       ) : null}
+
+      <ConfirmDialog
+        open={removeTarget !== null}
+        title="Remove schedule report?"
+        description={
+          removeTarget ? (
+            <>
+              <p>
+                <strong className="text-foreground">{removeTarget.customer}</strong> ·{" "}
+                {removeTarget.name}
+              </p>
+              <p>
+                This deletes the schedule and stops future runs. Its past jobs and extract files
+                remain under <strong className="text-foreground">Jobs</strong>, but this schedule
+                and its history disappear from Reports.
+              </p>
+              <p className="text-danger">This cannot be undone.</p>
+            </>
+          ) : null
+        }
+        confirmLabel="Remove schedule"
+        pending={removeSchedule.isPending}
+        error={removeSchedule.isError ? (removeSchedule.error as Error).message : null}
+        onConfirm={() => {
+          if (removeTarget?.schedule_id != null) {
+            removeSchedule.mutate(removeTarget.schedule_id);
+          }
+        }}
+        onCancel={() => {
+          if (!removeSchedule.isPending) {
+            setRemoveTarget(null);
+            removeSchedule.reset();
+          }
+        }}
+      />
     </div>
   );
 }

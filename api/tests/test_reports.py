@@ -1,4 +1,4 @@
-"""Customer-wise scheduled-run reports."""
+﻿"""Customer-wise scheduled-run reports."""
 
 from __future__ import annotations
 
@@ -167,14 +167,15 @@ def test_report_totals_comparisons_and_status(client):
     assert totals["pct_vs_yesterday"] == 10.0
     assert totals["pct_vs_last_week"] == 120.0
     assert totals["completed_today"] == 2
-    assert totals["failed_today"] == 2
-    assert totals["runs_today"] == 4
-    assert totals["success_rate_today"] == 50.0
+    assert totals["failed_today"] == 1
+    assert totals["runs_today"] == 3
+    assert totals["success_rate_today"] == 66.7
     assert totals["schedules"] == 3
     assert totals["enabled_schedules"] == 2
 
     by_customer = {c["customer"]: c for c in body["customers"]}
-    assert set(by_customer) == {"ACME", "BETA", "GAMMA", "ZETA"}
+    assert set(by_customer) == {"ACME", "BETA", "GAMMA"}
+    assert "ZETA" not in by_customer
 
     acme = by_customer["ACME"]["schedules"][0]
     assert acme["today_rows"] == 100
@@ -198,10 +199,6 @@ def test_report_totals_comparisons_and_status(client):
     assert gamma["enabled"] is False
     assert all(d["status"] == "off" for d in gamma["days"])
 
-    zeta = by_customer["ZETA"]["schedules"][0]
-    assert zeta["schedule_id"] is None
-    assert zeta["today_status"] == "failed"
-
     # A 7-day window still has to show the same-weekday comparison, even though
     # that day sits just outside the visible strip.
     short = client.get("/reports?days=7").json()
@@ -217,10 +214,7 @@ def test_failed_alerts_include_customer_job_and_recipients(client):
     _seed(client)
     body = client.get("/reports?days=14").json()
     failed = [a for a in body["alerts"] if a["kind"] == "failed"]
-    assert {(a["customer"], a["job_name"]) for a in failed} == {
-        ("ACME", "Daily A"),
-        ("ZETA", "Removed job"),
-    }
+    assert {(a["customer"], a["job_name"]) for a in failed} == {("ACME", "Daily A")}
     acme = next(a for a in failed if a["customer"] == "ACME")
     assert acme["occurrences"] == 1
     assert acme["error"] == "Last9 502"
@@ -309,3 +303,32 @@ def test_report_excludes_manual_jobs(client):
     body = client.get("/reports?days=7").json()
     assert body["totals"]["rows_today"] == 0
     assert body["customers"] == []
+
+
+def test_deleting_schedule_removes_its_report_but_keeps_jobs(client):
+    with client.session_factory() as db:
+        db.add(_schedule(id=30, name="Delete me", customer="DELETE"))
+        db.add(
+            _job(
+                id=3000,
+                schedule_id=30,
+                name="Delete me",
+                customer="DELETE",
+                status="completed",
+                rows=10,
+                created_at=_at(0, 1),
+            )
+        )
+        db.commit()
+
+    before = client.get("/reports?days=7").json()
+    assert any(c["customer"] == "DELETE" for c in before["customers"])
+
+    assert client.delete("/schedules/30").status_code == 204
+
+    after = client.get("/reports?days=7").json()
+    assert all(c["customer"] != "DELETE" for c in after["customers"])
+    assert all(a["customer"] != "DELETE" for a in after["alerts"])
+    # The schedule is gone, but the job history and its files are not.
+    with client.session_factory() as db:
+        assert db.get(Job, 3000) is not None

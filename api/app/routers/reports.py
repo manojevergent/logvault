@@ -307,17 +307,22 @@ def get_report(
     }
 
     jobs_by_schedule: dict[int, list[Job]] = defaultdict(list)
-    orphan_jobs: list[Job] = []
     for job in jobs:
         owner = job.created_by or ""
         try:
             schedule_id = int(owner.split(":", 1)[1])
         except (IndexError, ValueError):
             continue
+        # Runs whose schedule no longer exists stay in Jobs, but not in this
+        # report: removing a schedule report means the row must disappear, not
+        # come back as a "removed schedule" ghost.
         if schedule_id in schedule_by_id:
             jobs_by_schedule[schedule_id].append(job)
-        else:
-            orphan_jobs.append(job)
+
+    # Everything below sees only runs that belong to a schedule that still
+    # exists. That is what makes removing a schedule's report actually remove
+    # it; the jobs themselves remain available under Jobs.
+    jobs = [job for group in jobs_by_schedule.values() for job in group]
 
     schedule_reports: list[ReportScheduleOut] = []
     for schedule in schedules:
@@ -334,34 +339,6 @@ def get_report(
                 schedule=schedule,
                 schedule_last_run_at=schedule.last_run_at,
                 jobs=sched_jobs,
-                day_keys=day_keys,
-                today=today,
-            )
-        )
-
-    # Runs whose schedule was deleted still deserve a row - otherwise a silent
-    # failure disappears with the schedule.
-    orphan_groups: dict[tuple[str, str], list[Job]] = defaultdict(list)
-    for job in orphan_jobs:
-        day = _utc_date(job.created_at)
-        # A deleted schedule only belongs in the visible window; an old orphan
-        # row would otherwise add a customer with a permanent row of zeros.
-        if day is None or day < start_day:
-            continue
-        orphan_groups[(_job_customer(job), _job_name(job))].append(job)
-    for (customer, name), group in orphan_groups.items():
-        schedule_reports.append(
-            _build_schedule(
-                schedule_id=None,
-                name=name,
-                customer=customer,
-                enabled=False,
-                interval_seconds=None,
-                calendar_day=False,
-                source=_schedule_source(None, group, sources),
-                schedule=None,
-                schedule_last_run_at=None,
-                jobs=group,
                 day_keys=day_keys,
                 today=today,
             )
@@ -423,7 +400,7 @@ def get_report(
         except (IndexError, ValueError):
             schedule_id = None
         if schedule_id not in schedule_by_id:
-            schedule_id = None
+            continue
         failed_groups[(_job_customer(job), _job_name(job), schedule_id)].append(job)
 
     for (customer, name, schedule_id), group in failed_groups.items():

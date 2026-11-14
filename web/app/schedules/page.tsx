@@ -15,6 +15,7 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import * as React from "react";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { ImportJsonButton } from "@/components/import-json-button";
 import { TemplatePicker } from "@/components/template-picker";
 import { Badge } from "@/components/ui/badge";
@@ -119,101 +120,139 @@ export default function SchedulesPage() {
 function ScheduleRow({ s, onChange }: { s: Schedule; onChange: () => void }) {
   const [editing, setEditing] = React.useState(false);
   const [rollingUp, setRollingUp] = React.useState(false);
+  const [confirmDelete, setConfirmDelete] = React.useState(false);
   const toggle = useMutation({ mutationFn: () => toggleSchedule(s.id), onSuccess: onChange });
-  const del = useMutation({ mutationFn: () => deleteSchedule(s.id), onSuccess: onChange });
+  const del = useMutation({
+    mutationFn: () => deleteSchedule(s.id),
+    onSuccess: () => {
+      setConfirmDelete(false);
+      onChange();
+    },
+  });
   // Rolling up means merging each run's unique values; a schedule that doesn't
   // parse & aggregate has none to merge.
   const canRollUp = Boolean(s.filter_spec?.aggregation?.enabled);
 
   return (
-    <Card>
-      <CardContent className="p-4">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <span className="font-medium">{s.name}</span>
-              <Badge tone={s.enabled ? "success" : "neutral"}>{s.enabled ? "on" : "off"}</Badge>
-              <Badge tone="info">{s.output_format}</Badge>
-              {s.bq_config && <Badge tone="info">→ BQ</Badge>}
-              {s.s3_profile_id && (
-                <Badge tone="info">S3: {s.s3_profile_label ?? `#${s.s3_profile_id}`}</Badge>
-              )}
+    <>
+      <Card>
+        <CardContent className="p-4">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="font-medium">{s.name}</span>
+                <Badge tone={s.enabled ? "success" : "neutral"}>{s.enabled ? "on" : "off"}</Badge>
+                <Badge tone="info">{s.output_format}</Badge>
+                {s.bq_config && <Badge tone="info">→ BQ</Badge>}
+                {s.s3_profile_id && (
+                  <Badge tone="info">S3: {s.s3_profile_label ?? `#${s.s3_profile_id}`}</Badge>
+                )}
+              </div>
+              <p className="font-mono text-xs text-muted-foreground">
+                every {human(s.interval_seconds)} ·{" "}
+                {s.calendar_day ? "window 00:00–23:59 UTC" : `window ${human(s.lookback_seconds)}`}{" "}
+                · {s.region_code}
+                {s.last_run_at && ` · last ${s.last_run_at.slice(0, 16).replace("T", " ")}`}
+              </p>
             </div>
-            <p className="font-mono text-xs text-muted-foreground">
-              every {human(s.interval_seconds)} ·{" "}
-              {s.calendar_day ? "window 00:00–23:59 UTC" : `window ${human(s.lookback_seconds)}`} ·{" "}
-              {s.region_code}
-              {s.last_run_at && ` · last ${s.last_run_at.slice(0, 16).replace("T", " ")}`}
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            {s.last_run_job_id != null && (
-              <Link href={`/jobs/${s.last_run_job_id}`}>
-                <Button size="sm" variant="ghost" className="gap-1 text-xs">
-                  Last job <ArrowRight className="h-3 w-3" />
+            <div className="flex items-center gap-2">
+              {s.last_run_job_id != null && (
+                <Link href={`/jobs/${s.last_run_job_id}`}>
+                  <Button size="sm" variant="ghost" className="gap-1 text-xs">
+                    Last job <ArrowRight className="h-3 w-3" />
+                  </Button>
+                </Link>
+              )}
+              {canRollUp && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setRollingUp((v) => !v)}
+                  className="gap-1 text-xs"
+                >
+                  <Sigma className="h-3.5 w-3.5" /> Roll up
                 </Button>
-              </Link>
-            )}
-            {canRollUp && (
+              )}
+              <Button
+                size="icon"
+                variant="ghost"
+                aria-label="Export schedule config"
+                title="Export config as JSON"
+                onClick={async () =>
+                  downloadJson(`${s.name || `schedule_${s.id}`}.json`, await exportSchedule(s.id))
+                }
+              >
+                <FileDown className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                size="icon"
+                variant="ghost"
+                aria-label="Edit schedule"
+                onClick={() => setEditing((v) => !v)}
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </Button>
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => setRollingUp((v) => !v)}
-                className="gap-1 text-xs"
+                onClick={() => toggle.mutate()}
+                disabled={toggle.isPending}
               >
-                <Sigma className="h-3.5 w-3.5" /> Roll up
+                <Power className="h-3.5 w-3.5" /> {s.enabled ? "Disable" : "Enable"}
               </Button>
-            )}
-            <Button
-              size="icon"
-              variant="ghost"
-              aria-label="Export schedule config"
-              title="Export config as JSON"
-              onClick={async () =>
-                downloadJson(`${s.name || `schedule_${s.id}`}.json`, await exportSchedule(s.id))
-              }
-            >
-              <FileDown className="h-3.5 w-3.5" />
-            </Button>
-            <Button
-              size="icon"
-              variant="ghost"
-              aria-label="Edit schedule"
-              onClick={() => setEditing((v) => !v)}
-            >
-              <Pencil className="h-3.5 w-3.5" />
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => toggle.mutate()}
-              disabled={toggle.isPending}
-            >
-              <Power className="h-3.5 w-3.5" /> {s.enabled ? "Disable" : "Enable"}
-            </Button>
-            <Button
-              size="icon"
-              variant="ghost"
-              aria-label="Delete schedule"
-              onClick={() => del.mutate()}
-              disabled={del.isPending}
-            >
-              <Trash2 className="h-4 w-4 text-danger" />
-            </Button>
+              <Button
+                size="icon"
+                variant="ghost"
+                aria-label="Delete schedule"
+                title="Delete schedule"
+                onClick={() => setConfirmDelete(true)}
+                disabled={del.isPending}
+              >
+                <Trash2 className="h-4 w-4 text-danger" />
+              </Button>
+            </div>
           </div>
-        </div>
-        {rollingUp && <RollupForm s={s} onDone={() => setRollingUp(false)} />}
-        {editing && (
-          <EditScheduleForm
-            s={s}
-            onDone={() => {
-              setEditing(false);
-              onChange();
-            }}
-          />
-        )}
-      </CardContent>
-    </Card>
+          {rollingUp && <RollupForm s={s} onDone={() => setRollingUp(false)} />}
+          {editing && (
+            <EditScheduleForm
+              s={s}
+              onDone={() => {
+                setEditing(false);
+                onChange();
+              }}
+            />
+          )}
+        </CardContent>
+      </Card>
+
+      <ConfirmDialog
+        open={confirmDelete}
+        title="Delete schedule?"
+        description={
+          <>
+            <p>
+              <strong className="text-foreground">{s.name}</strong>
+            </p>
+            <p>
+              Future runs stop immediately. Past jobs and extract files remain under{" "}
+              <strong className="text-foreground">Jobs</strong>, but this schedule and its report
+              disappear.
+            </p>
+            <p className="text-danger">This cannot be undone.</p>
+          </>
+        }
+        confirmLabel="Delete schedule"
+        pending={del.isPending}
+        error={del.isError ? (del.error as Error).message : null}
+        onConfirm={() => del.mutate()}
+        onCancel={() => {
+          if (!del.isPending) {
+            setConfirmDelete(false);
+            del.reset();
+          }
+        }}
+      />
+    </>
   );
 }
 
