@@ -147,7 +147,7 @@ def create_group(
 
     # Everything is validated before the group or any job exists, so a bad
     # source never leaves a half-created group behind.
-    plans = _resolve_batch_plans(db, body.items)
+    plans = _resolve_batch_plans(db, body.items, created_by=user.email)
 
     name = body.name.strip() or (
         f"Group · {len(plans)} search{'' if len(plans) == 1 else 'es'} · "

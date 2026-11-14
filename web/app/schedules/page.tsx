@@ -69,7 +69,12 @@ export default function SchedulesPage() {
     queryFn: listSchedules,
   });
 
-  const invalidate = () => qc.invalidateQueries({ queryKey: ["schedules"] });
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ["schedules"] });
+    // A schedule save can register its regex in Log formats; keep the library
+    // list (and the wizard's library fields) in step without a refresh.
+    qc.invalidateQueries({ queryKey: ["log-formats"] });
+  };
 
   return (
     <div className="mx-auto max-w-5xl animate-fade-in px-6 py-8">
@@ -584,6 +589,7 @@ function AddScheduleForm({ onDone }: { onDone: () => void }) {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["schedules"] });
+      qc.invalidateQueries({ queryKey: ["log-formats"] });
       onDone();
     },
   });

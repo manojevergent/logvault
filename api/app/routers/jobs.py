@@ -76,10 +76,8 @@ def _to_out(job: Job, credential_label: str | None = None, check_files: bool = T
     if check_files:
         out.has_output = bool(job.output_file_path) and os.path.exists(job.output_file_path or "")
         if out.has_output and job.output_file_path:
-            try:
+            with contextlib.suppress(OSError):
                 out.output_size_bytes = os.path.getsize(job.output_file_path)
-            except OSError:
-                pass
     else:
         out.has_output = bool(job.output_file_path)
     if job.status in _DOWNLOADABLE and out.has_output:
@@ -336,13 +334,15 @@ MAX_BATCH_ITEMS = 50
 
 
 def _resolve_batch_plans(
-    db: Session, items
+    db: Session, items, *, created_by: str | None = None
 ) -> list[tuple[FilterTemplate, dict | None, int, int, str, S3Profile | None]]:
     """Validate every selected search and pin its source before anything runs.
 
     Shared by the legacy /jobs/batch endpoint and the first-class group launch;
     resolving once is what keeps validation and job creation from disagreeing
-    about which index a search runs against.
+    about which index a search runs against. Registration here also catches a
+    template whose pattern predates auto-registration or was created while the
+    feature was off: launching the group makes the library current.
     """
     plans: list[tuple[FilterTemplate, dict | None, int, int, str, S3Profile | None]] = []
     for item in items:
@@ -377,6 +377,15 @@ def _resolve_batch_plans(
         agg = dict(tpl.aggregation) if tpl.aggregation else None
         _validate_agg_dict(agg)
         s3_profile = s3.profile_or_422(db, tpl.s3_profile_id)
+        # Idempotent by regex; no-op for a pattern already in the library.
+        register_aggregation_pattern(
+            db,
+            aggregation=agg,
+            source_name=tpl.name,
+            source_kind="saved search",
+            source_id=tpl.id,
+            created_by=created_by,
+        )
         plans.append((tpl, agg, credential_id, index_target_id, region_code, s3_profile))
     return plans
 
@@ -403,7 +412,7 @@ def create_batch(
 
     # (template, aggregation, resolved credential/index/region). Resolved once
     # here so validation and creation can't disagree about the source.
-    plans = _resolve_batch_plans(db, body.items)
+    plans = _resolve_batch_plans(db, body.items, created_by=user.email)
 
     # The batch is also a group, so it can be tracked/canceled/retried as one
     # unit later. One-search batches (the quick-run button on a saved search)

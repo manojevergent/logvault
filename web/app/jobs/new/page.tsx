@@ -378,6 +378,7 @@ export default function NewJobPage() {
     mutationFn: (name: string) => createTemplate(buildTemplatePayload(name)),
     onSuccess: (tpl) => {
       qc.invalidateQueries({ queryKey: ["templates"] });
+      qc.invalidateQueries({ queryKey: ["log-formats"] });
       setTemplateId(tpl.id);
       setSearchLabel(tpl.name);
       setSavingTemplate(false);
@@ -397,6 +398,7 @@ export default function NewJobPage() {
           existingName: existing?.name ?? name,
         });
         qc.invalidateQueries({ queryKey: ["templates"] });
+        qc.invalidateQueries({ queryKey: ["log-formats"] });
       }
     },
   });
@@ -408,6 +410,7 @@ export default function NewJobPage() {
     mutationFn: (name: string) => updateTemplate(Number(templateId), buildTemplatePayload(name)),
     onSuccess: (tpl) => {
       qc.invalidateQueries({ queryKey: ["templates"] });
+      qc.invalidateQueries({ queryKey: ["log-formats"] });
       setSearchLabel(tpl.name);
       setSaveConflict(null);
     },
@@ -421,6 +424,7 @@ export default function NewJobPage() {
           existingName: existing?.name ?? name,
         });
         qc.invalidateQueries({ queryKey: ["templates"] });
+        qc.invalidateQueries({ queryKey: ["log-formats"] });
       }
     },
   });
@@ -436,6 +440,7 @@ export default function NewJobPage() {
     },
     onSuccess: (tpl) => {
       qc.invalidateQueries({ queryKey: ["templates"] });
+      qc.invalidateQueries({ queryKey: ["log-formats"] });
       setTemplateId(tpl.id);
       setSearchLabel(tpl.name);
       setSavingTemplate(false);
@@ -931,6 +936,8 @@ export default function NewJobPage() {
       if (effectiveCredentialId !== "") saveLastUsed(Number(effectiveCredentialId), region);
       saveRange(start, end, tz);
       setRecentRanges(getRecentRanges());
+      // The job's regex was registered server-side; refresh any open library list.
+      qc.invalidateQueries({ queryKey: ["log-formats"] });
       router.push(`/jobs/${job.id}`);
     },
   });

@@ -375,6 +375,7 @@ function TemplateEditForm({
     (tpl.exclude_exact_phrases ?? []).join(", ")
   );
   const [messageTypesText, setMessageTypesText] = React.useState(tpl.message_types.join(", "));
+  const qc = useQueryClient();
 
   const [aggEnabled, setAggEnabled] = React.useState(agg?.enabled ?? false);
   const [useLibrary, setUseLibrary] = React.useState(agg?.use_library ?? false);
@@ -556,7 +557,12 @@ function TemplateEditForm({
             }
           : null,
       }),
-    onSuccess: onSaved,
+    onSuccess: () => {
+      // The API auto-registers a changed regex; refresh the library so the
+      // wizard and detector see it immediately.
+      qc.invalidateQueries({ queryKey: ["log-formats"] });
+      onSaved();
+    },
   });
 
   const canSave =
