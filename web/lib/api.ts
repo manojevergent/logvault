@@ -892,6 +892,30 @@ export const detectLogFormats = (lines: string[]) =>
     body: JSON.stringify({ lines }),
   });
 
+export type JobDetectResult = DetectResult & {
+  job_id: number;
+  job_label: string;
+  customer: string;
+  unmatched_total: number;
+  /** "stored unmatched samples" | "unmatched artifact" | "job preview" */
+  source: string;
+};
+
+export type JobLearnResult = {
+  format: LogFormat;
+  detection: JobDetectResult;
+  created: boolean;
+};
+
+export const detectJobLogFormats = (jobId: number) =>
+  req<JobDetectResult>(`/log-formats/jobs/${jobId}/detect`, { method: "POST" });
+
+export const learnJobLogFormat = (jobId: number, body: { name: string; regex?: string }) =>
+  req<JobLearnResult>(`/log-formats/jobs/${jobId}/learn`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
 // ── New Relic connections ────────────────────────────────────────────────────
 
 export type NewRelicCredential = {

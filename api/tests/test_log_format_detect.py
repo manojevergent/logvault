@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+from app.models import Job
+
 pytestmark = pytest.mark.usefixtures("job_refs")
 
 LINE = (
@@ -230,3 +232,115 @@ def test_detect_requires_at_least_one_line(client):
     body = client.post("/log-formats/detect", json={"lines": ["  ", ""]}).json()
     assert body["lines_analyzed"] == 0
     assert "Paste at least one log line" in body["message"]
+
+
+# --- learning from a real job ------------------------------------------------
+
+KV_LINES = [
+    "ts=2026-01-01T00:00:00Z level=INFO user=alice action=login",
+    "ts=2026-01-01T00:01:00Z level=INFO user=bob action=logout",
+]
+
+
+def _job_with_unmatched(client, lines, label="Checkout", customer="ACME"):
+    with client.session_factory() as db:
+        job = Job(
+            status="completed",
+            region_code="ap-southeast-1",
+            index_target_id=1,
+            credential_id=1,
+            start_epoch=0,
+            end_epoch=3600,
+            filter_spec={"label": label, "customer": customer},
+            rows_written=0,
+            aggregation_result={
+                "rows_unmatched": len(lines),
+                "unmatched_samples": [
+                    {"timestamp": "2026-01-01T00:00:00Z", "message": line} for line in lines
+                ],
+            },
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        return job.id
+
+
+def test_detect_job_uses_stored_unmatched_samples(client):
+    job_id = _job_with_unmatched(client, KV_LINES)
+    response = client.post(f"/log-formats/jobs/{job_id}/detect")
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    assert body["job_id"] == job_id
+    assert body["job_label"] == "Checkout"
+    assert body["customer"] == "ACME"
+    assert body["lines_analyzed"] == 2
+    assert body["unmatched_total"] == 2
+    assert body["source"] == "stored unmatched samples"
+    assert body["inferred"] is not None
+    assert "user=" in body["inferred"]["regex"]
+    assert {f["name"] for f in body["inferred"]["fields"]} == {
+        "ts",
+        "level",
+        "user",
+        "action",
+    }
+
+
+def test_learn_saves_an_enabled_format_and_dedupes(client):
+    job_id = _job_with_unmatched(client, KV_LINES)
+
+    response = client.post(
+        f"/log-formats/jobs/{job_id}/learn",
+        json={"name": "Checkout KV"},
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["created"] is True
+    fmt = body["format"]
+    assert fmt["name"] == "Checkout KV"
+    assert fmt["priority"] == 500
+    assert fmt["enabled"] is True
+    assert "job #" in (fmt["description"] or "")
+    assert "Checkout" in (fmt["description"] or "")
+
+    formats = client.get("/log-formats").json()
+    assert [f["id"] for f in formats if f["name"] == "Checkout KV"] == [fmt["id"]]
+
+    # Same regex, different requested name: not a second format.
+    again = client.post(
+        f"/log-formats/jobs/{job_id}/learn",
+        json={"name": "Checkout KV copy", "regex": fmt["regex"]},
+    )
+    assert again.status_code == 201, again.text
+    assert again.json()["created"] is False
+    assert again.json()["format"]["id"] == fmt["id"]
+    assert len(client.get("/log-formats").json()) == 1
+
+
+def test_job_without_unmatched_lines_cannot_learn(client):
+    with client.session_factory() as db:
+        job = Job(
+            status="completed",
+            region_code="ap-southeast-1",
+            index_target_id=1,
+            credential_id=1,
+            start_epoch=0,
+            end_epoch=3600,
+            filter_spec={"label": "Clean", "customer": "ACME"},
+            rows_written=5,
+            aggregation_result={"rows_unmatched": 0, "unmatched_samples": []},
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        job_id = job.id
+
+    detected = client.post(f"/log-formats/jobs/{job_id}/detect")
+    assert detected.status_code == 200
+    assert detected.json()["lines_analyzed"] == 0
+    assert "no unmatched lines" in (detected.json()["message"] or "")
+
+    learned = client.post(f"/log-formats/jobs/{job_id}/learn", json={})
+    assert learned.status_code == 422

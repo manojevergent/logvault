@@ -326,12 +326,40 @@ class LogFormatDetectResult(BaseModel):
     matched: int
     unmatched: int
     candidates: list[DetectedCandidate]
-    # Keys found when a line is JSON — offered when no saved pattern fits.
+    # Keys found when a line is JSON - offered when no saved pattern fits.
     json_fields: list[DetectedField] = []
     # A pattern built from the pasted lines themselves, offered when nothing
     # saved fits and the lines are not JSON.
     inferred: InferredPattern | None = None
     message: str | None = None
+
+
+class JobDetectResult(LogFormatDetectResult):
+    """Detection run against a real job's unmatched lines, not a paste."""
+
+    job_id: int
+    job_label: str = ""
+    customer: str = ""
+    unmatched_total: int = 0
+    # "stored samples" or "unmatched artifact" - what was actually analyzed.
+    source: str = ""
+
+
+class JobLearnRequest(BaseModel):
+    """Save a learned pattern to Log formats.
+
+    `regex` lets the operator keep a candidate the detector offered (or edit the
+    inferred one) before saving; empty means use the inferred pattern.
+    """
+
+    name: str = ""
+    regex: str | None = None
+
+
+class JobLearnResult(BaseModel):
+    format: LogFormatOut
+    detection: JobDetectResult
+    created: bool
 
 
 class JobCreate(BaseModel):

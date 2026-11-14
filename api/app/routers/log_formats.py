@@ -7,6 +7,8 @@ is a row in this table rather than an edit to each search.
 
 from __future__ import annotations
 
+import csv
+import os
 import re
 from typing import Literal
 
@@ -19,11 +21,14 @@ from app import audit
 from app.aggregation import MAX_PATTERN_LENGTH, check_pattern_cost, normalize_pattern
 from app.database import get_db
 from app.deps import get_current_user
-from app.models import FilterTemplate, LogFormat, User
+from app.models import FilterTemplate, Job, LogFormat, User
 from app.schemas import (
     DetectedCandidate,
     DetectedField,
     InferredPattern,
+    JobDetectResult,
+    JobLearnRequest,
+    JobLearnResult,
     LogFormatCreate,
     LogFormatDetectRequest,
     LogFormatDetectResult,
@@ -582,6 +587,216 @@ def detect_formats(
         inferred=inferred,
         message=message,
     )
+
+
+# --- learn a format from a real job -----------------------------------------
+
+# Learned patterns run after curated ones, in the same tier as patterns
+# auto-registered from manual regexes.
+_LEARNED_PRIORITY = 500
+
+
+def _job_label_customer(job: Job) -> tuple[str, str]:
+    spec = job.filter_spec or {}
+    return str(spec.get("label") or ""), str(spec.get("customer") or "")
+
+
+def _job_lines(job: Job) -> tuple[list[str], str, int]:
+    """Distinct real lines this job could not parse, and where they came from.
+
+    Prefer the stored distinct samples (cheap, already deduped). Fall back to the
+    complete unmatched artifact, and finally to a preview sample for a job that
+    produced no aggregation result at all.
+    """
+    agg = job.aggregation_result or {}
+    total = int(agg.get("rows_unmatched") or 0)
+    seen: set[str] = set()
+    lines: list[str] = []
+
+    def add(message: object) -> None:
+        if not isinstance(message, str):
+            return
+        message = message.strip()
+        if not message or message in seen or len(lines) >= MAX_DETECT_LINES:
+            return
+        seen.add(message)
+        lines.append(message[:MAX_LINE_CHARS])
+
+    source = "stored unmatched samples"
+    for sample in agg.get("unmatched_samples") or []:
+        if isinstance(sample, dict):
+            add(sample.get("message"))
+
+    if not lines and job.unmatched_file_path and os.path.exists(job.unmatched_file_path):
+        source = "unmatched artifact"
+        try:
+            with open(job.unmatched_file_path, newline="", encoding="utf-8") as handle:
+                reader = csv.reader(handle)
+                header = next(reader, None)
+                index = 1
+                if header and "message" in header:
+                    index = header.index("message")
+                for row in reader:
+                    if not row:
+                        continue
+                    add(row[index] if index < len(row) else row[-1])
+                    if len(lines) >= MAX_DETECT_LINES:
+                        break
+        except OSError:
+            pass
+
+    if not lines and job.preview:
+        source = "job preview"
+        for row in job.preview:
+            if isinstance(row, dict):
+                add(row.get("message"))
+
+    return lines, source, total or len(lines)
+
+
+def _detect_job(db: Session, job: Job, user: User) -> JobDetectResult:
+    label, customer = _job_label_customer(job)
+    lines, source, total = _job_lines(job)
+    if not lines:
+        return JobDetectResult(
+            job_id=job.id,
+            job_label=label,
+            customer=customer,
+            unmatched_total=total,
+            source=source,
+            lines_analyzed=0,
+            matched=0,
+            unmatched=0,
+            candidates=[],
+            message=(
+                "This job has no unmatched lines to learn from. Run a preview with parsing "
+                "enabled, or paste lines manually."
+            ),
+        )
+    base = detect_formats(LogFormatDetectRequest(lines=lines), db, user)
+    return JobDetectResult(
+        **base.model_dump(),
+        job_id=job.id,
+        job_label=label,
+        customer=customer,
+        unmatched_total=total,
+        source=source,
+    )
+
+
+@router.post("/jobs/{job_id}/detect", response_model=JobDetectResult)
+def detect_job_formats(
+    job_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> JobDetectResult:
+    """Analyze a real job's unmatched lines, without pasting them anywhere."""
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
+    return _detect_job(db, job, user)
+
+
+@router.post("/jobs/{job_id}/learn", response_model=JobLearnResult, status_code=status.HTTP_201_CREATED)
+def learn_job_format(
+    job_id: int,
+    body: JobLearnRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> JobLearnResult:
+    """Save a pattern learned from a job's unmatched lines into the library.
+
+    The format is enabled immediately, so jobs using the Log Formats library
+    pick it up on their next run. This job's existing output is unchanged.
+    """
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
+    detection = _detect_job(db, job, user)
+    if detection.lines_analyzed == 0:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detection.message or "this job has no unmatched lines to learn from",
+        )
+
+    inferred = detection.inferred.regex if detection.inferred else ""
+    regex = (body.regex or inferred).strip()
+    if not regex:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detection.message or "no pattern could be inferred from these lines",
+        )
+    if len(regex) > MAX_PATTERN_LENGTH:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "pattern is too long")
+    try:
+        check_pattern_cost(regex)
+        normalized = normalize_pattern(regex).strip()
+        compiled = re.compile(normalized)
+    except (re.error, ValueError) as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"invalid regex: {exc}") from exc
+
+    lines, _source, _total = _job_lines(job)
+    sample = next((line for line in lines if compiled.search(line)), lines[0] if lines else "")
+    label, customer = _job_label_customer(job)
+    name = (body.name.strip() or f"{label or f'Job {job.id}'} (learned)")[:100].rstrip()
+    description = f"Learned from {detection.lines_analyzed} unmatched line"
+    description += "" if detection.lines_analyzed == 1 else "s"
+    description += f" of job #{job.id}"
+    if label:
+        description += f" ({label})"
+    if customer:
+        description += f" · {customer}"
+
+    _validate(
+        LogFormatCreate(
+            name=name,
+            regex=regex,
+            sample_line=sample,
+            priority=_LEARNED_PRIORITY,
+            enabled=True,
+            description=description,
+        )
+    )
+
+    # Same pattern, different name is not a new format. Return the one the
+    # extractor already has instead of adding a duplicate.
+    for existing in db.scalars(select(LogFormat)):
+        try:
+            if normalize_pattern(existing.regex).strip() == normalized:
+                return JobLearnResult(format=existing, detection=detection, created=False)
+        except (re.error, ValueError):
+            continue
+
+    used = set(db.scalars(select(LogFormat.name)))
+    candidate = name
+    suffix = 2
+    while candidate in used:
+        candidate = f"{name[:110]} ({suffix})"[:120]
+        suffix += 1
+
+    fmt = LogFormat(
+        name=candidate,
+        regex=regex,
+        hint=None,
+        sample_line=sample or None,
+        priority=_LEARNED_PRIORITY,
+        enabled=True,
+        description=description,
+        created_by=user.email,
+    )
+    db.add(fmt)
+    db.flush()
+    audit.record(
+        db,
+        "learn",
+        "log_format",
+        fmt.id,
+        {"job_id": job.id, "name": fmt.name},
+        user_id=user.email,
+    )
+    db.commit()
+    db.refresh(fmt)
+    return JobLearnResult(format=fmt, detection=detection, created=True)
 
 
 @router.post("/test", response_model=LogFormatTestResult)

@@ -15,6 +15,8 @@ import {
   PlayCircle,
   RefreshCw,
   Search,
+  Sparkles,
+  Save,
   Trash2,
   CloudUpload,
 } from "lucide-react";
@@ -24,15 +26,19 @@ import * as React from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input, Label } from "@/components/ui/input";
 import {
   API_BASE,
   JOB_TONE,
   Job,
+  JobDetectResult,
   cancelJob,
   createJob,
   deleteJobFiles,
+  detectJobLogFormats,
   getJob,
   getSettings,
+  learnJobLogFormat,
   pauseJob,
   resumeJob,
   retryJob,
@@ -847,6 +853,155 @@ function downloadUnmatchedSamples(
   URL.revokeObjectURL(url);
 }
 
+function LearnFormatCard({ job }: { job: Job }) {
+  const qc = useQueryClient();
+  const [result, setResult] = React.useState<JobDetectResult | null>(null);
+  const [name, setName] = React.useState("");
+  const [saved, setSaved] = React.useState<{ name: string; created: boolean } | null>(null);
+
+  const detect = useMutation({
+    mutationFn: () => detectJobLogFormats(job.id),
+    onSuccess: (data) => {
+      setResult(data);
+      setSaved(null);
+      setName(`${data.job_label || `Job ${job.id}`} (learned)`);
+    },
+  });
+  const learn = useMutation({
+    mutationFn: () =>
+      learnJobLogFormat(job.id, {
+        name: name.trim(),
+        regex: result?.inferred?.regex,
+      }),
+    onSuccess: (data) => {
+      setSaved({ name: data.format.name, created: data.created });
+      qc.invalidateQueries({ queryKey: ["log-formats"] });
+    },
+  });
+  const inferred = result?.inferred ?? null;
+
+  return (
+    <div className="mt-3 border border-border bg-muted/20 p-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="flex items-start gap-2">
+          <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+          <div>
+            <p className="text-sm font-medium">Learn a format from these lines</p>
+            <p className="text-[11px] text-muted-foreground">
+              Analyze the {job.aggregation_result?.rows_unmatched?.toLocaleString() ?? ""} unmatched
+              lines, infer a pattern, and save it to Log formats for future jobs.
+            </p>
+          </div>
+        </div>
+        {!result && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => detect.mutate()}
+            disabled={detect.isPending}
+          >
+            {detect.isPending ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Sparkles className="h-3.5 w-3.5" />
+            )}
+            Analyze
+          </Button>
+        )}
+      </div>
+
+      {detect.isError && (
+        <p className="mt-2 text-xs text-danger">{(detect.error as Error).message}</p>
+      )}
+
+      {result && (
+        <div className="mt-2 space-y-2 border-t border-border pt-2">
+          <p className="text-[11px] text-muted-foreground">
+            Analyzed {result.lines_analyzed} line{result.lines_analyzed === 1 ? "" : "s"} from{" "}
+            {result.source}
+            {result.matched > 0 ? ` · ${result.matched} matched an existing format` : ""}.
+          </p>
+          {result.candidates.length > 0 && (
+            <p className="text-[11px] text-muted-foreground">
+              Existing formats: {result.candidates.map((candidate) => candidate.name).join(", ")}
+            </p>
+          )}
+
+          {inferred ? (
+            <>
+              <div>
+                <p className="text-[11px] font-medium">Inferred pattern</p>
+                <pre className="mt-1 max-h-28 overflow-auto border border-border bg-background p-2 font-mono text-[11px]">
+                  {inferred.regex}
+                </pre>
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {inferred.fields.map((field) => (
+                  <span
+                    key={field.name}
+                    className="inline-flex items-center gap-1 border border-border bg-muted/50 px-1.5 py-0.5 text-[11px]"
+                    title={`${field.coverage} of ${result.lines_analyzed} lines · e.g. ${field.sample || "(empty)"}`}
+                  >
+                    <span className="font-mono font-medium">{field.name}</span>
+                    <span className="text-muted-foreground">
+                      {field.coverage}/{result.lines_analyzed}
+                    </span>
+                  </span>
+                ))}
+              </div>
+              <div className="flex flex-wrap items-end gap-2">
+                <div className="min-w-[220px] flex-1 space-y-1">
+                  <Label className="text-[11px]">Format name</Label>
+                  <Input
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                    maxLength={100}
+                  />
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => learn.mutate()}
+                  disabled={!name.trim() || learn.isPending}
+                >
+                  {learn.isPending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Save className="h-3.5 w-3.5" />
+                  )}
+                  Save to Log formats
+                </Button>
+              </div>
+              {learn.isError && (
+                <p className="text-xs text-danger">{(learn.error as Error).message}</p>
+              )}
+              {saved && (
+                <p className="text-xs text-success">
+                  {saved.created ? "Saved" : "Already in Log formats"} as{" "}
+                  <strong>{saved.name}</strong>. Future jobs using the format library can parse this
+                  shape; this job&apos;s existing output is unchanged.
+                </p>
+              )}
+            </>
+          ) : result.json_fields.length > 0 ? (
+            <p className="text-[11px] text-muted-foreground">
+              These lines are JSON. Keys found:{" "}
+              {result.json_fields
+                .slice(0, 12)
+                .map((field) => field.name)
+                .join(", ")}
+              . Save a regex format for this shape under Log formats to reuse it.
+            </p>
+          ) : (
+            <p className="text-[11px] text-muted-foreground">
+              {result.message ?? "No reusable pattern was inferred from these lines."}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AggregationResultCard({ job }: { job: Job }) {
   const agg = job.aggregation_result;
   // A regex that misses a value format drops those rows silently and reports a
@@ -1035,6 +1190,7 @@ function AggregationResultCard({ job }: { job: Job }) {
             </div>
           </details>
         )}
+        {agg.rows_unmatched > 0 && <LearnFormatCard job={job} />}
         {job.unmatched_url && !(agg.unmatched_samples && agg.unmatched_samples.length > 0) && (
           <p className="mb-2 text-xs text-muted-foreground">
             <a
