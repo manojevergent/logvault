@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select, text
 
-from app import db
+from app import db, fenced
 from app.config import get_settings
 from app.last9 import AggregationSpec, Aggregator, DistinctStore, store_path
 from app.notifications import send_failure_alert
@@ -82,8 +82,23 @@ def run_rollup(job_id: int) -> None:
         if job is None:
             return
         job = dict(job)
-        db.update_job(conn, job_id, status="running", started_at=_now(), error_message=None)
+        # Atomic claim, same ownership model as extraction. Two workers can no
+        # longer run the same rollup, and a duplicate delivery bows out instead
+        # of marking a live job running again.
+        lease_token = db.claim_job(
+            conn,
+            job_id,
+            owner_id="rollup",
+            started_at=_now(),
+            error_message=None,
+        )
+        if not lease_token:
+            return
         db.add_event(conn, job_id, "Rollup started")
+
+    def save(conn, _job_id, **values):
+        """Fenced write: a superseded rollup cannot overwrite newer state."""
+        return fenced.fenced_update(conn, job_id, lease_token, **values)
 
     customer = (job["filter_spec"] or {}).get("customer")
     spec_json = job["rollup_of"] or {}
@@ -93,7 +108,7 @@ def run_rollup(job_id: int) -> None:
     if not schedule_id or not agg_config.get("regex"):
         error_msg = "rollup needs a schedule_id and an aggregation spec"
         with eng.begin() as conn:
-            db.update_job(
+            save(
                 conn,
                 job_id,
                 status="failed",
@@ -150,7 +165,7 @@ def run_rollup(job_id: int) -> None:
         for i, (s, path) in enumerate(usable, start=1):
             dest.merge_from(path)
             with eng.begin() as conn:
-                db.update_job(
+                save(
                     conn,
                     job_id,
                     completed_chunks=i,
@@ -183,7 +198,7 @@ def run_rollup(job_id: int) -> None:
         error_msg = str(exc)
         with eng.begin() as conn:
             job = db.load(conn, db.jobs, job_id)
-            db.update_job(
+            save(
                 conn, job_id, status="failed", error_message=error_msg, finished_at=_now()
             )
             db.add_event(conn, job_id, f"Failed: {exc}", level="error")
@@ -225,7 +240,7 @@ def run_rollup(job_id: int) -> None:
         )
         if skipped:
             msg += f"; {len(skipped)} run(s) skipped — counts are incomplete"
-        db.update_job(
+        save(
             conn,
             job_id,
             status="completed",

@@ -74,6 +74,12 @@ def downgrade() -> None:
     # instead of silently losing work. The runbook's drain steps exist to get
     # these counts to zero first.
     bind = op.get_bind()
+    # Take the table exclusively BEFORE counting. A dispatcher that committed
+    # after the count but before the DROP would otherwise lose its row silently.
+    # Holding ACCESS EXCLUSIVE blocks new inserts and waits out transactions
+    # that already touched the table, so the counts below see everything that
+    # can still exist and nothing can be added afterwards.
+    bind.execute(sa.text("LOCK TABLE job_dispatch_outbox IN ACCESS EXCLUSIVE MODE"))
     pending = bind.execute(sa.text(
         "SELECT count(*) FROM job_dispatch_outbox WHERE status IN ('pending','leased')"
     )).scalar()

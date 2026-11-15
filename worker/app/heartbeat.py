@@ -41,7 +41,7 @@ class LeaseKeeper(threading.Thread):
         self._token = token
         self._ttl = ttl
         self._interval = interval
-        self._stop = threading.Event()
+        self._stopped = threading.Event()
         self.lost = threading.Event()
 
     def tick(self) -> bool:
@@ -56,12 +56,12 @@ class LeaseKeeper(threading.Thread):
         return True
 
     def run(self) -> None:
-        while not self._stop.wait(self._interval):
+        while not self._stopped.wait(self._interval):
             if not self.tick():
                 break
 
     def stop(self) -> None:
-        self._stop.set()
+        self._stopped.set()
 
 
 class Heartbeat(threading.Thread):
@@ -78,7 +78,7 @@ class Heartbeat(threading.Thread):
         # 0, not -1: the claim itself already stamped progress, so the first
         # tick must not extend the lease unless work has actually advanced.
         self._renewed_at = 0
-        self._stop = threading.Event()
+        self._stopped = threading.Event()
         self.lost = False
 
     def progress(self) -> None:
@@ -102,9 +102,9 @@ class Heartbeat(threading.Thread):
         return True
 
     def run(self) -> None:
-        while not self._stop.wait(self._interval):
+        while not self._stopped.wait(self._interval):
             if not self.tick():
                 break
 
     def stop(self) -> None:
-        self._stop.set()
+        self._stopped.set()
