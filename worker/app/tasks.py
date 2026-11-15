@@ -121,9 +121,11 @@ def _mark_failed(db, job_id: int, exc: BaseException) -> None:
     # suppress is best-effort by design: if this fails too (DB down), there is
     # nothing further to try, and the original exception still reaches Celery.
     with contextlib.suppress(Exception), db.engine().begin() as conn:
-        # Only claim jobs the runner never got to. A job it already moved to
-        # paused/canceled/failed/completed has a better story than this one.
-        if db.current_status(conn, job_id) in ("queued", "running"):
+        # Only jobs the runner never got to. "running" is deliberately excluded:
+        # a live worker owns that row, and a failed duplicate delivery used to be
+        # able to mark a healthy job failed. Stale running rows are the
+        # reconciler's job, not this fallback's.
+        if db.current_status(conn, job_id) == "queued":
             job = db.load(conn, db.jobs, job_id)
             db.update_job(
                 conn,

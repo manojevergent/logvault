@@ -69,6 +69,24 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Refuse to destroy dispatch intent. Dropping this table discards every
+    # obligation that has not been delivered, so the downgrade fails loudly
+    # instead of silently losing work. The runbook's drain steps exist to get
+    # these counts to zero first.
+    bind = op.get_bind()
+    pending = bind.execute(sa.text(
+        "SELECT count(*) FROM job_dispatch_outbox WHERE status IN ('pending','leased')"
+    )).scalar()
+    orphaned = bind.execute(sa.text(
+        "SELECT count(*) FROM job_dispatch_outbox o JOIN jobs j ON j.id = o.job_id "
+        "WHERE o.status = 'dead' AND j.status NOT IN ('completed','failed','canceled')"
+    )).scalar()
+    if pending or orphaned:
+        raise RuntimeError(
+            "refusing to drop job_dispatch_outbox: "
+            f"{pending} pending/leased and {orphaned} dead obligations for "
+            "non-terminal jobs. Drain or resolve them before downgrading."
+        )
     op.drop_index("ix_job_dispatch_locked", table_name="job_dispatch_outbox")
     op.drop_index("ix_job_dispatch_due", table_name="job_dispatch_outbox")
     op.drop_table("job_dispatch_outbox")

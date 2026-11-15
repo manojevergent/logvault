@@ -21,6 +21,7 @@ import httpx
 from sqlalchemy import text
 
 from app import artifacts, crypto, db, fenced
+from app.heartbeat import LeaseKeeper
 from app.config import get_settings
 from app.last9 import (
     AggregationError,
@@ -246,6 +247,12 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
         job = dict(job)
         cred = dict(cred)
         idx = dict(idx)
+
+    # Timer-driven renewal, independent of row delivery. Inline renewal in the
+    # scan loop cannot help while a single extraction call blocks for longer
+    # than the lease TTL, which is exactly when a healthy worker looked stalled.
+    keeper = LeaseKeeper(eng, job_id, lease_token)
+    keeper.start()
 
     settings = get_settings()
     excel_escape = settings.excel_escape
@@ -701,6 +708,9 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
                     # healthy long chunk never looks stalled.
                     if not fenced.renew_progress(conn, job_id, lease_token):
                         raise RuntimeError("lease lost while scanning")
+                if keeper.lost.is_set():
+                    # The keeper noticed while this loop was blocked upstream.
+                    raise RuntimeError("lease lost while scanning")
                 if live_status in ("paused", "canceled"):
                     raise _Stopped(live_status)
             # Keep the job looking alive while one large chunk streams. The

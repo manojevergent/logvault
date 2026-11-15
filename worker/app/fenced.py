@@ -94,7 +94,13 @@ def renew_progress(conn, job_id: int, token: int, ttl_seconds: int = 60) -> bool
     """Heartbeat that also extends the lease. Only call when work advanced."""
     result = conn.execute(
         update(db.jobs)
-        .where(db.jobs.c.id == job_id, db.jobs.c.lease_token == token)
+        # status='running' matters: a keeper thread that outlives the job must
+        # not resurrect a lease on a terminal row.
+        .where(
+            db.jobs.c.id == job_id,
+            db.jobs.c.lease_token == token,
+            db.jobs.c.status == "running",
+        )
         .values(
             heartbeat_at=sa.func.now(),
             progress_at=sa.func.now(),

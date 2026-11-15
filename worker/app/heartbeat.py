@@ -17,6 +17,53 @@ import threading
 from app import fenced
 
 
+class LeaseKeeper(threading.Thread):
+    """Timer-driven lease renewal.
+
+    Renews on a wall-clock interval regardless of whether the runner is yielding
+    rows. A blocking extraction call - a Last9 retry chain, a slow page - yields
+    nothing, so an inline, yield-driven renewal lets the lease expire while the
+    worker is perfectly healthy.
+
+    Each tick opens its own short transaction: no session is shared with the
+    runner, so there is no cross-thread session state and no long-lived
+    connection. The thread exits on the first failed renewal, on any terminal
+    job state (``renew_progress`` requires ``status='running'``), and on
+    ``stop()``. It is a daemon, so a crashed runner cannot be kept alive by it.
+    """
+
+    daemon = True
+
+    def __init__(self, engine, job_id: int, token: int, *, ttl: int = 60, interval: int = 15):
+        super().__init__(name=f"lease-keeper-{job_id}")
+        self._engine = engine
+        self._job_id = job_id
+        self._token = token
+        self._ttl = ttl
+        self._interval = interval
+        self._stop = threading.Event()
+        self.lost = threading.Event()
+
+    def tick(self) -> bool:
+        try:
+            with self._engine.begin() as conn:
+                ok = fenced.renew_progress(conn, self._job_id, self._token, self._ttl)
+        except Exception:  # noqa: BLE001 - DB blip is not proof of lost ownership
+            return True
+        if not ok:
+            self.lost.set()
+            return False
+        return True
+
+    def run(self) -> None:
+        while not self._stop.wait(self._interval):
+            if not self.tick():
+                break
+
+    def stop(self) -> None:
+        self._stop.set()
+
+
 class Heartbeat(threading.Thread):
     daemon = True
 
