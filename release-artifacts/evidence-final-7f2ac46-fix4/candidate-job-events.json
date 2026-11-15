@@ -1,0 +1,30 @@
+﻿[
+    {
+        "id":  1,
+        "ts":  "2026-11-15T14:58:35.656362Z",
+        "level":  "info",
+        "message":  "Job started",
+        "rows_delta":  0
+    },
+    {
+        "id":  2,
+        "ts":  "2026-11-15T14:58:35.667086Z",
+        "level":  "warning",
+        "message":  "Checkpoint not trusted (missing); restarting from chunk 0",
+        "rows_delta":  0
+    },
+    {
+        "id":  3,
+        "ts":  "2026-11-15T14:58:39.076274Z",
+        "level":  "info",
+        "message":  "Chunk 1/1 done",
+        "rows_delta":  6923
+    },
+    {
+        "id":  4,
+        "ts":  "2026-11-15T14:58:39.093821Z",
+        "level":  "info",
+        "message":  "Job completed",
+        "rows_delta":  0
+    }
+]

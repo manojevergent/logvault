@@ -1,0 +1,42 @@
+{
+    "git_commit": "7f2ac46",
+    "git_commit_full": "7f2ac468e21de16e2feee9f2bd81b8fe0669c89b",
+    "git_parent": "84046b2",
+    "release": "Release 1",
+    "candidate": "7f2ac46-fix4",
+    "built_at_utc": "2026-11-15T13:55:54Z",
+    "build_input": "git archive --format=tar 7f2ac46 (tracked files only, LF endings)",
+    "builder": "Docker Desktop 29.8.2, BuildKit, docker build --progress=plain",
+    "base_image": "python:3.12-slim (floating tag, resolved at build time; not digest-pinned)",
+    "fixes": [
+        "F-02a rollup claim + fenced writes (84046b2)",
+        "F-04 ACCESS EXCLUSIVE lock before the downgrade guard (84046b2)",
+        "F-13 timer-driven LeaseKeeper; _stop shadowing bug fixed (84046b2)",
+        "F-02a-1 rollup narration gated on the fenced write result (7f2ac46)"
+    ],
+    "alembic_revision": "0034",
+    "images": {
+        "api": "sha256:78f7f987cf3bc5074e6f3aeb9b08c3816bf4e18d7ddb57b3b4772de21c6396bb",
+        "web": "sha256:6a6489dcc5d3d9ef76ef5c6cc0cc4ab11faa8fac376895a14f9974b0fd660ab1",
+        "worker": "sha256:f96fac9f2d16a0b3141578111cc110313f6de5488dcc6f80868767fbfe224fbb"
+    },
+    "image_notes": {
+        "api": "NOT rebuilt; source unchanged since 84046b2",
+        "web": "NOT rebuilt; NEXT_PUBLIC_API_BASE_URL still http://localhost:8000",
+        "worker": "rebuilt from 7f2ac46; index/manifest-list digest (BuildKit attestations present); config digest sha256:4a3ea343a668f789e60451ae128a9e735807318c783ae7441b0f73ec9d8a1be3"
+    },
+    "checksums_file": "checksums.sha256",
+    "checksums_entry_count": 29,
+    "checksums_self_hash_file": "CHECKSUMS_SHA256.txt",
+    "open": [
+        "Last9 extraction NOT TESTED (no non-production credential)",
+        "web image built with localhost API URL (GB-05)",
+        "starlette 0.41.3 (7), ecdsa 0.19.2 (1), python-jose PYSEC-2025-185 (no fix) deferred",
+        "single-person review and approval limitation",
+        "production-scale backup/restore and migration rehearsal not performed",
+        "RK-19 rollup validates the aggregation spec after the claim",
+        "RK-20 completed_without_pointer gauge flags source-less rollups"
+    ],
+    "product": "Last9 Web Application",
+    "gate_b": "NOT GRANTED"
+}

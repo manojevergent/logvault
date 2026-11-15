@@ -1,0 +1,5 @@
+﻿base_image=python:3.12-slim
+local_state_before_build=absent (docker image inspect returned: No such image)
+resolution=resolved/pulled by BuildKit during the build; tag is floating and was not pinned by digest
+consequence=commit-to-image provenance is verifiable; bit-identical rebuilds on another host are not
+image_created_utc=2026-11-15T13:55:57.191903373Z

@@ -1,0 +1,1 @@
+﻿-rw-r--r-- 1 root root 309505 Nov 15 14:40 /data/exports/LIGHTBOX/job_976.csv.zip

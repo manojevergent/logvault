@@ -1,0 +1,145 @@
+﻿ 
+docker : /usr/local/lib/python3.12/site-packages/celery/platforms.py:829: SecurityWarning: You're running the worker 
+with superuser privileges: this is
+At E:\last9_web_app-p1\release-artifacts\evidence-final-7f2ac46-fix4\run_candidate_acceptance.ps1:230 char:1
++ docker logs r1acc-worker 2>&1 | Out-File -Encoding utf8 "$Evidence\ca ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (/usr/local/lib/...ileges: this is:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ -------------- celery@55fb5d19ff6a v5.4.0 (opalescent)
+--- ***** ----- 
+absolutely not recommended!
+-- ******* ---- Linux-6.6.114.1-microsoft-standard-WSL2-x86_64-with-glibc2.41 2026-11-15 14:58:32
+
+Please specify a different user using the --uid option.
+
+User information: uid=0 euid=0 gid=0 egid=0
+
+  warnings.warn(SecurityWarning(ROOT_DISCOURAGED.format(
+- *** --- * --- 
+- ** ---------- [config]
+- ** ---------- .> app:         logvault:0x7e7a8d243ad0
+- ** ---------- .> transport:   redis://r1acc-redis:6379/1
+- ** ---------- .> results:     redis://r1acc-redis:6379/2
+- *** --- * --- .> concurrency: 1 (prefork)
+-- ******* ---- .> task events: OFF (enable -E to monitor tasks in this worker)
+--- ***** ----- 
+ -------------- [queues]
+                .> celery           exchange=celery(direct) key=celery
+                
+
+[tasks]
+  . logvault.check_system_health
+  . logvault.cleanup_exports
+  . logvault.ping
+  . logvault.publish_outbox
+  . logvault.reap_stale_jobs
+  . logvault.reconcile_leases
+  . logvault.run_job
+  . logvault.scan_schedules
+[2026-11-15 14:58:32,585: INFO/MainProcess] Connected to redis://r1acc-redis:6379/1
+  . logvault.upload_job_s3
+
+[2026-11-15 14:58:32,590: INFO/MainProcess] mingle: searching for neighbors
+[2026-11-15 14:58:33,602: INFO/MainProcess] mingle: all alone
+[2026-11-15 14:58:33,609: INFO/MainProcess] celery@55fb5d19ff6a ready.
+[2026-11-15 14:58:35,554: INFO/MainProcess] Task logvault.run_job[29731dbd-4e78-4aa0-8fab-f6dfa3a02fd0] received
+[2026-11-15 14:58:38,655: INFO/ForkPoolWorker-1] HTTP Request: POST https://app.last9.io/api/v4/organizations/evergenta
+pse1/logs/api/v2/query_range/json?start=1794751115&end=1794754715&limit=10000&direction=backward&step=200ms&offset=0&re
+gion=ap-southeast-1&index=physical_index%3AUMServices "HTTP/1.1 200 OK"
+[2026-11-15 14:58:39,099: INFO/ForkPoolWorker-1] Task logvault.run_job[29731dbd-4e78-4aa0-8fab-f6dfa3a02fd0] succeeded 
+in 3.5433108880001782s: None
+[2026-11-15 14:58:39,100: INFO/MainProcess] Task logvault.publish_outbox[10648384-23c9-400f-ad9c-c46c839c6abf] received
+[2026-11-15 14:58:39,118: INFO/ForkPoolWorker-1] Task logvault.publish_outbox[10648384-23c9-400f-ad9c-c46c839c6abf] 
+succeeded in 0.01743838400034292s: {'claimed': 1, 'published': 1, 'failed': 0, 'lost_update': 0}
+[2026-11-15 14:58:39,120: INFO/MainProcess] Task logvault.run_job[9470d098-0289-4576-9f5a-dd87bfd43d74] received
+[2026-11-15 14:58:39,127: INFO/ForkPoolWorker-1] Task logvault.run_job[9470d098-0289-4576-9f5a-dd87bfd43d74] succeeded 
+in 0.006069244000173057s: None
+[2026-11-15 14:58:43,206: INFO/MainProcess] Task logvault.publish_outbox[50b78b02-9b24-4320-9ec5-9c92f3b67fc7] received
+[2026-11-15 14:58:43,210: INFO/ForkPoolWorker-1] Task logvault.publish_outbox[50b78b02-9b24-4320-9ec5-9c92f3b67fc7] 
+succeeded in 0.0027904840003429854s: {'claimed': 0, 'published': 0, 'failed': 0, 'lost_update': 0}
+[2026-11-15 14:58:48,206: INFO/MainProcess] Task logvault.reconcile_leases[a92f43f8-27db-4664-a703-0cbcb891c6e7] 
+received
+[2026-11-15 14:58:48,210: INFO/ForkPoolWorker-1] Task logvault.reconcile_leases[a92f43f8-27db-4664-a703-0cbcb891c6e7] 
+succeeded in 0.0029725700001108635s: {'expired': 0, 'redispatched': 0, 'canceled': 0, 'paused': 0, 'failed': 0}
+[2026-11-15 14:58:48,211: INFO/MainProcess] Task logvault.publish_outbox[a52c39f1-f7fa-4817-8e7e-4a674613163c] received
+[2026-11-15 14:58:48,215: INFO/ForkPoolWorker-1] Task logvault.publish_outbox[a52c39f1-f7fa-4817-8e7e-4a674613163c] 
+succeeded in 0.0034200949999103614s: {'claimed': 0, 'published': 0, 'failed': 0, 'lost_update': 0}
+[2026-11-15 14:58:53,208: INFO/MainProcess] Task logvault.publish_outbox[0bf1957c-1924-4744-a4e9-a45d2c59e0e0] received
+[2026-11-15 14:58:53,212: INFO/ForkPoolWorker-1] Task logvault.publish_outbox[0bf1957c-1924-4744-a4e9-a45d2c59e0e0] 
+succeeded in 0.0033280759998888243s: {'claimed': 0, 'published': 0, 'failed': 0, 'lost_update': 0}
+[2026-11-15 14:58:58,208: INFO/MainProcess] Task logvault.publish_outbox[50ae2af3-3d22-40ad-8500-11942dc434e4] received
+[2026-11-15 14:58:58,212: INFO/ForkPoolWorker-1] Task logvault.publish_outbox[50ae2af3-3d22-40ad-8500-11942dc434e4] 
+succeeded in 0.0037964219995956228s: {'claimed': 0, 'published': 0, 'failed': 0, 'lost_update': 0}
+[2026-11-15 14:59:03,207: INFO/MainProcess] Task logvault.reconcile_leases[a025d25c-b5a5-4c76-8e6c-870f6a23ea44] 
+received
+[2026-11-15 14:59:03,211: INFO/ForkPoolWorker-1] Task logvault.reconcile_leases[a025d25c-b5a5-4c76-8e6c-870f6a23ea44] 
+succeeded in 0.004350920000433689s: {'expired': 0, 'redispatched': 0, 'canceled': 0, 'paused': 0, 'failed': 0}
+[2026-11-15 14:59:03,213: INFO/MainProcess] Task logvault.publish_outbox[d03f0fcc-103b-45a9-8078-f590efc8d64d] received
+[2026-11-15 14:59:03,216: INFO/ForkPoolWorker-1] Task logvault.publish_outbox[d03f0fcc-103b-45a9-8078-f590efc8d64d] 
+succeeded in 0.0021255899996504013s: {'claimed': 0, 'published': 0, 'failed': 0, 'lost_update': 0}
+[2026-11-15 14:59:08,209: INFO/MainProcess] Task logvault.publish_outbox[9acc877d-a278-4b39-8de3-f1c7e9aefaab] received
+[2026-11-15 14:59:08,214: INFO/ForkPoolWorker-1] Task logvault.publish_outbox[9acc877d-a278-4b39-8de3-f1c7e9aefaab] 
+succeeded in 0.0041868739999699756s: {'claimed': 0, 'published': 0, 'failed': 0, 'lost_update': 0}
+[2026-11-15 14:59:13,209: INFO/MainProcess] Task logvault.publish_outbox[ee80c67f-447f-4362-8043-b990aaba27d5] received
+[2026-11-15 14:59:13,214: INFO/ForkPoolWorker-1] Task logvault.publish_outbox[ee80c67f-447f-4362-8043-b990aaba27d5] 
+succeeded in 0.0043171269999220385s: {'claimed': 0, 'published': 0, 'failed': 0, 'lost_update': 0}
+[2026-11-15 14:59:18,206: INFO/MainProcess] Task logvault.reconcile_leases[c029baba-cbf4-4ed6-a610-ec9f4741a358] 
+received
+[2026-11-15 14:59:18,211: INFO/ForkPoolWorker-1] Task logvault.reconcile_leases[c029baba-cbf4-4ed6-a610-ec9f4741a358] 
+succeeded in 0.00366857400013032s: {'expired': 0, 'redispatched': 0, 'canceled': 0, 'paused': 0, 'failed': 0}
+[2026-11-15 14:59:18,213: INFO/MainProcess] Task logvault.publish_outbox[871f24f8-d93c-4f17-881b-2869f5b57868] received
+[2026-11-15 14:59:18,217: INFO/ForkPoolWorker-1] Task logvault.publish_outbox[871f24f8-d93c-4f17-881b-2869f5b57868] 
+succeeded in 0.0031579349997628015s: {'claimed': 0, 'published': 0, 'failed': 0, 'lost_update': 0}
+[2026-11-15 14:59:23,211: INFO/MainProcess] Task logvault.publish_outbox[8dbdaf48-1e4d-4526-90d2-0de34994ba88] received
+[2026-11-15 14:59:23,214: INFO/ForkPoolWorker-1] Task logvault.publish_outbox[8dbdaf48-1e4d-4526-90d2-0de34994ba88] 
+succeeded in 0.002610033000109979s: {'claimed': 0, 'published': 0, 'failed': 0, 'lost_update': 0}
+[2026-11-15 14:59:28,212: INFO/MainProcess] Task logvault.publish_outbox[f2e276c7-50bf-4ec8-b1bb-4608694f51b0] received
+[2026-11-15 14:59:28,215: INFO/ForkPoolWorker-1] Task logvault.publish_outbox[f2e276c7-50bf-4ec8-b1bb-4608694f51b0] 
+succeeded in 0.0026571039998088963s: {'claimed': 0, 'published': 0, 'failed': 0, 'lost_update': 0}
+[2026-11-15 14:59:33,207: INFO/MainProcess] Task logvault.scan_schedules[5883bea5-114c-484c-9325-60746c3b6ad4] received
+[2026-11-15 14:59:33,221: INFO/ForkPoolWorker-1] Task logvault.scan_schedules[5883bea5-114c-484c-9325-60746c3b6ad4] 
+succeeded in 0.01336903399987932s: [2]
+[2026-11-15 14:59:33,222: INFO/MainProcess] Task logvault.check_system_health[24155b99-ee95-4e4b-94c6-ba5b47805989] 
+received
+[2026-11-15 14:59:34,229: INFO/ForkPoolWorker-1] Task 
+logvault.check_system_health[24155b99-ee95-4e4b-94c6-ba5b47805989] succeeded in 1.0069310980002228s: {'metrics': 
+{'ts': '2026-11-15T14:59:33.226852+00:00', 'cpu_pct': 0.8, 'memory_pct': 10.2, 'memory_used_mb': 1196, 
+'memory_total_mb': 11697, 'disk_pct': 2.4, 'disk_free_gb': 931.2, 'disk_total_gb': 1006.9, 'disk_path': 
+'/data/exports', 'load1': 0.22}, 'alerts': []}
+[2026-11-15 14:59:34,231: INFO/MainProcess] Task logvault.reconcile_leases[46487452-2817-4b11-b990-10f8d9e1594f] 
+received
+[2026-11-15 14:59:34,233: INFO/ForkPoolWorker-1] Task logvault.reconcile_leases[46487452-2817-4b11-b990-10f8d9e1594f] 
+succeeded in 0.0025825509997048357s: {'expired': 0, 'redispatched': 0, 'canceled': 0, 'paused': 0, 'failed': 0}
+[2026-11-15 14:59:34,234: INFO/MainProcess] Task logvault.publish_outbox[7379d85a-0179-4863-9324-64d88c1e04f3] received
+[2026-11-15 14:59:34,236: INFO/ForkPoolWorker-1] Task logvault.publish_outbox[7379d85a-0179-4863-9324-64d88c1e04f3] 
+succeeded in 0.001627541999823734s: {'claimed': 0, 'published': 0, 'failed': 0, 'lost_update': 0}
+[2026-11-15 14:59:34,237: INFO/MainProcess] Task logvault.run_job[cd6ebaa3-b768-454d-98e8-28e9deb20843] received
+[2026-11-15 14:59:36,819: INFO/ForkPoolWorker-1] HTTP Request: POST https://app.last9.io/api/v4/organizations/evergenta
+pse1/logs/api/v2/query_range/json?start=1794751173&end=1794754773&limit=10000&direction=backward&step=200ms&offset=0&re
+gion=ap-southeast-1&index=physical_index%3AUMServices "HTTP/1.1 200 OK"
+[2026-11-15 14:59:37,272: INFO/ForkPoolWorker-1] Task logvault.run_job[cd6ebaa3-b768-454d-98e8-28e9deb20843] succeeded 
+in 3.034288695000214s: None
+[2026-11-15 14:59:38,210: INFO/MainProcess] Task logvault.publish_outbox[40f3e629-67fc-44a1-9a8d-e11dbac10b1a] received
+[2026-11-15 14:59:38,214: INFO/ForkPoolWorker-1] Task logvault.publish_outbox[40f3e629-67fc-44a1-9a8d-e11dbac10b1a] 
+succeeded in 0.0032552110001233814s: {'claimed': 0, 'published': 0, 'failed': 0, 'lost_update': 0}
+[2026-11-15 14:59:39,542: INFO/MainProcess] Task logvault.run_job[5c88840a-e7d7-42e1-bc44-aaa5b550fb40] received
+[2026-11-15 14:59:39,891: INFO/ForkPoolWorker-1] HTTP Request: POST https://app.last9.io/api/v4/oauth/access_token 
+"HTTP/1.1 400 Bad Request"
+[2026-11-15 14:59:39,899: INFO/ForkPoolWorker-1] Task logvault.run_job[5c88840a-e7d7-42e1-bc44-aaa5b550fb40] succeeded 
+in 0.3559694710002077s: None
+[2026-11-15 14:59:42,575: INFO/MainProcess] Task logvault.run_job[4b1cc801-79ac-4d97-b067-435f992eaf60] received
+[2026-11-15 14:59:42,808: INFO/ForkPoolWorker-1] HTTP Request: POST https://app.last9.io/api/v4/oauth/access_token 
+"HTTP/1.1 400 Bad Request"
+[2026-11-15 14:59:42,817: INFO/ForkPoolWorker-1] Task logvault.run_job[4b1cc801-79ac-4d97-b067-435f992eaf60] succeeded 
+in 0.24150095999993937s: None
+[2026-11-15 14:59:43,210: INFO/MainProcess] Task logvault.publish_outbox[23aa1bc4-92b1-4235-bffe-262a093c5870] received
+[2026-11-15 14:59:43,219: INFO/ForkPoolWorker-1] Task logvault.publish_outbox[23aa1bc4-92b1-4235-bffe-262a093c5870] 
+succeeded in 0.008588707999933831s: {'claimed': 2, 'published': 2, 'failed': 0, 'lost_update': 0}
+[2026-11-15 14:59:43,220: INFO/MainProcess] Task logvault.run_job[ceff83ff-a516-4739-bf21-a5aeb49df440] received
+[2026-11-15 14:59:43,228: INFO/ForkPoolWorker-1] Task logvault.run_job[ceff83ff-a516-4739-bf21-a5aeb49df440] succeeded 
+in 0.007059296000079485s: None
+[2026-11-15 14:59:43,229: INFO/MainProcess] Task logvault.run_job[30c4b372-c5c0-4b4b-ae78-46c4f7ed35b7] received
+[2026-11-15 14:59:43,233: INFO/ForkPoolWorker-1] Task logvault.run_job[30c4b372-c5c0-4b4b-ae78-46c4f7ed35b7] succeeded 
+in 0.003708417999860103s: None

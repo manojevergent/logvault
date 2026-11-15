@@ -1,0 +1,36 @@
+﻿{"environment": "acceptance", "version": "0.1.0", "event": "api.startup", "level": "info", "timestamp": "2026-11-15T14:58:32.870872Z"}
+INFO:     172.21.0.1:50160 - "GET /health HTTP/1.1" 200 OK
+INFO:     172.21.0.1:50160 - "GET /ready HTTP/1.1" 200 OK
+INFO:     172.21.0.1:50160 - "POST /auth/login HTTP/1.1" 200 OK
+INFO:     172.21.0.1:50160 - "POST /credentials/9/test HTTP/1.1" 200 OK
+INFO:     172.21.0.1:50160 - "POST /indexes HTTP/1.1" 201 Created
+INFO:     172.21.0.1:50160 - "POST /jobs HTTP/1.1" 201 Created
+INFO:     172.21.0.1:50160 - "GET /jobs/1 HTTP/1.1" 200 OK
+INFO:     172.21.0.1:50160 - "GET /jobs/1 HTTP/1.1" 200 OK
+INFO:     172.21.0.1:50160 - "GET /jobs/1 HTTP/1.1" 200 OK
+INFO:     172.21.0.1:50160 - "GET /jobs/1/events HTTP/1.1" 200 OK
+INFO:     172.21.0.1:50160 - "GET /jobs/1/download?exp=1795359521&sig=8b41b74097368a75966d8038700360b23cb0b36221b3ded602092240330f481a HTTP/1.1" 200 OK
+INFO:     172.21.0.1:50160 - "POST /schedules HTTP/1.1" 201 Created
+INFO:     172.21.0.1:54720 - "GET /jobs/2 HTTP/1.1" 200 OK
+INFO:     172.21.0.1:54720 - "GET /jobs/2 HTTP/1.1" 200 OK
+INFO:     172.21.0.1:54720 - "GET /jobs/2 HTTP/1.1" 200 OK
+INFO:     172.21.0.1:54720 - "POST /schedules/1/toggle HTTP/1.1" 200 OK
+INFO:     172.21.0.1:54720 - "POST /credentials HTTP/1.1" 201 Created
+INFO:     172.21.0.1:54720 - "POST /indexes HTTP/1.1" 201 Created
+INFO:     172.21.0.1:54720 - "POST /jobs HTTP/1.1" 201 Created
+INFO:     172.21.0.1:54720 - "GET /jobs/3 HTTP/1.1" 200 OK
+INFO:     172.21.0.1:54720 - "GET /jobs/3 HTTP/1.1" 200 OK
+INFO:     172.21.0.1:54720 - "POST /jobs/3/retry HTTP/1.1" 201 Created
+INFO:     172.21.0.1:54720 - "GET /jobs/4 HTTP/1.1" 200 OK
+INFO:     172.21.0.1:54720 - "GET /jobs/4 HTTP/1.1" 200 OK
+docker : INFO:     Started server process [1]
+At E:\last9_web_app-p1\release-artifacts\evidence-final-7f2ac46-fix4\run_candidate_acceptance.ps1:232 char:1
++ docker logs r1acc-api 2>&1 | Out-File -Encoding utf8 "$Evidence\candi ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (INFO:     Started server process [1]:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+HTTP Request: POST https://app.last9.io/api/v4/oauth/access_token "HTTP/1.1 200 OK"
