@@ -667,6 +667,11 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
         update_fields["checkpoint"] = {**cp.to_dict(), **checkpoint_extra}
 
         with eng.begin() as conn:
+            # A completed chunk is real progress: extend the lease here, in the
+            # same transaction as the checkpoint. Without this the 60s claim TTL
+            # expires mid-job and the reconciler fences a healthy worker.
+            if not fenced.renew_progress(conn, job_id, lease_token):
+                raise RuntimeError("lease lost while committing a chunk")
             fenced.fenced_update(conn, job_id, lease_token, **update_fields)
             db.add_event(
                 conn, job_id, f"Chunk {cp.completed_chunks}/{total} done", rows_delta=delta
@@ -691,6 +696,11 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
                 last_status_check = time.monotonic()
                 with eng.begin() as conn:
                     live_status = db.current_status(conn, job_id)
+                    # Rows are flowing, which is real progress: extend the lease.
+                    # STATUS_CHECK_SECONDS is well inside the 60s claim TTL, so a
+                    # healthy long chunk never looks stalled.
+                    if not fenced.renew_progress(conn, job_id, lease_token):
+                        raise RuntimeError("lease lost while scanning")
                 if live_status in ("paused", "canceled"):
                     raise _Stopped(live_status)
             # Keep the job looking alive while one large chunk streams. The

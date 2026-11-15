@@ -419,3 +419,46 @@ def test_total_chunks_on_resume_counts_only_what_is_left(worker_db, monkeypatch)
         job = dict(worker_db.load(conn, worker_db.jobs, 1))
     # 1 done + the remaining hour at 0.25h = 4 more. Not 8 (the whole range).
     assert job["total_chunks"] == 5
+
+
+def test_progress_extends_the_lease_so_a_long_chunk_is_never_reaped(worker_db, monkeypatch):
+    """The claim TTL is 60s; a long chunk must keep extending it.
+
+    Regression for the defect where heartbeat.py existed but the runner never
+    renewed the lease: every job longer than a minute looked stalled and was
+    fenced and redispatched while still healthy.
+    """
+    _seed(worker_db, start=0, end=3600)
+
+    calls = []
+    real = runner.fenced.renew_progress
+
+    def counting(conn, job_id, token, ttl_seconds=60):
+        calls.append((job_id, token))
+        return real(conn, job_id, token, ttl_seconds)
+
+    def fake(client, spec, *, checkpoint=None, on_chunk_complete=None, **kw):
+        cp = checkpoint
+        for i in range(10):
+            yield LogRow(str(i), f"line {i}", "")
+        cp.advance(chunk_index=0, chunk_start=0, chunk_end=3600, rows_delta=10)
+        on_chunk_complete(cp, 10)
+
+    class Clock:
+        t = 0.0
+
+        def __call__(self):
+            self.t += 60.0
+            return self.t
+
+    monkeypatch.setattr(runner, "iter_extraction", fake)
+    monkeypatch.setattr(runner.time, "monotonic", Clock())
+    monkeypatch.setattr(runner.fenced, "renew_progress", counting)
+
+    runner.run_extraction(1)
+
+    assert calls, "the runner must renew the lease while work advances"
+    assert all(job_id == 1 and token >= 1 for job_id, token in calls)
+    with worker_db.engine().begin() as conn:
+        job = dict(worker_db.load(conn, worker_db.jobs, 1))
+    assert job["status"] == "completed"
