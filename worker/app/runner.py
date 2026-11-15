@@ -20,7 +20,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 from sqlalchemy import text
 
-from app import crypto, db
+from app import artifacts, crypto, db, fenced
 from app.config import get_settings
 from app.last9 import (
     AggregationError,
@@ -42,6 +42,7 @@ from app.last9 import (
     preview_window_start,
     store_path,
 )
+from app.last9.checkpoint import validate as validate_checkpoint
 from app.notifications import send_failure_alert
 from app.s3 import upload_job_artifacts
 
@@ -226,13 +227,16 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
         reclaim_before = (
             _now() - timedelta(minutes=get_settings().stale_reclaim_minutes) if reclaim else None
         )
-        if not db.claim_job(
+        owner_id = f"worker:{os.getpid()}"[:128]
+        lease_token = db.claim_job(
             conn,
             job_id,
+            owner_id=owner_id,
             started_at=_now(),
             error_message=None,
             reclaim_before=reclaim_before,
-        ):
+        )
+        if not lease_token:
             return
         db.add_event(
             conn,
@@ -269,13 +273,27 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
         spec.start_epoch = preview_window_start(spec.start_epoch, spec.end_epoch, spec.chunk_hours)
 
     checkpoint_json = job["checkpoint"] or {}
-    cp = Checkpoint.from_dict(checkpoint_json)
+    cp, cp_reason = validate_checkpoint(
+        checkpoint_json, job_id=job_id, artifact_path=job.get("output_file_path")
+    )
+    if cp_reason is not None:
+        # Refuse the checkpoint, not the job: restart from chunk 0 in a fresh
+        # attempt namespace and say so in the event feed.
+        cp = Checkpoint()
+        checkpoint_json = {}
+        with eng.begin() as conn:
+            db.add_event(
+                conn,
+                job_id,
+                f"Checkpoint not trusted ({cp_reason}); restarting from chunk 0",
+                level="warning",
+            )
     file_offset = checkpoint_json.get("file_offset", 0)
     # Restore effective chunk_hours from the last checkpoint so adaptive sizing
     # survives pause/resume cycles.
     effective_chunk_hours = checkpoint_json.get("chunk_hours", spec.chunk_hours)
     spec.chunk_hours = effective_chunk_hours
-    resuming = cp.completed_chunks > 0
+    resuming = cp_reason is None
 
     agg_config = (job["filter_spec"] or {}).get("aggregation")
     aggregator: Aggregator | None = None
@@ -336,9 +354,10 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
             if distinct_store is not None:
                 distinct_store.close()
             with eng.begin() as conn:
-                db.update_job(
+                fenced.fenced_update(
                     conn,
                     job_id,
+                    lease_token,
                     status="failed",
                     error_message=f"aggregation config: {exc}",
                     finished_at=_now(),
@@ -347,8 +366,24 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
             return
 
     customer = (job["filter_spec"] or {}).get("customer")
+    # A new attempt writes into its own namespace, so a retry can never
+    # overwrite the previous attempt's output. A resume keeps the file its
+    # checkpoint names, because the checkpoint's byte offset is relative to it.
+    resuming_output = bool(resuming and job.get("output_file_path"))
+    if resuming_output:
+        attempt_root = os.path.dirname(job["output_file_path"])
+    else:
+        attempt_root = artifacts.ensure_attempt_dir(settings.storage_dir, job_id, lease_token)
     path = (
-        None if skip_raw_output else (job["output_file_path"] or output_path(job_id, fmt, customer))
+        None
+        if skip_raw_output
+        else (
+            job["output_file_path"]
+            if resuming_output
+            else artifacts.artifact_path(
+                settings.storage_dir, job_id, lease_token, "raw", ext=fmt
+            )
+        )
     )
     # Chunks already done, plus an estimate of what is left at the size now in
     # use. Measuring the whole range at the restored (adapted) size counted work
@@ -362,7 +397,7 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
     )
 
     with eng.begin() as conn:
-        db.update_job(conn, job_id, total_chunks=total, output_file_path=path)
+        fenced.fenced_update(conn, job_id, lease_token, total_chunks=total, output_file_path=path)
 
     http = httpx.Client(timeout=60.0)
 
@@ -443,7 +478,15 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
     # clean job leaves no empty file behind. Mirroring the raw file's byte
     # offset makes resume exact: a replayed chunk truncates back to the last
     # committed line instead of duplicating it.
-    unmatched_file = unmatched_path(job_id, customer) if aggregator is not None else None
+    unmatched_file = (
+        (
+            job["unmatched_file_path"]
+            if resuming_output and job.get("unmatched_file_path")
+            else os.path.join(attempt_root, f"job_{job_id}.unmatched.csv")
+        )
+        if aggregator is not None
+        else None
+    )
     unmatched_offset = checkpoint_json.get("unmatched_offset", 0)
     uf = None
     unmatched_writer = None
@@ -624,7 +667,7 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
         update_fields["checkpoint"] = {**cp.to_dict(), **checkpoint_extra}
 
         with eng.begin() as conn:
-            db.update_job(conn, job_id, **update_fields)
+            fenced.fenced_update(conn, job_id, lease_token, **update_fields)
             db.add_event(
                 conn, job_id, f"Chunk {cp.completed_chunks}/{total} done", rows_delta=delta
             )
@@ -676,13 +719,16 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
         http.close()
         with eng.begin() as conn:
             if stop.status == "canceled":
-                db.update_job(
+                fenced.fenced_update(
                     conn,
                     job_id,
+                    lease_token,
                     status="canceled",
                     finished_at=_now(),
                     rows_written=written,
                     preview=preview_sample,
+                    lease_expires_at=None,
+                    owner_id=None,
                 )
                 db.add_event(
                     conn,
@@ -691,12 +737,15 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
                     level="warn",
                 )
             else:
-                db.update_job(
+                fenced.fenced_update(
                     conn,
                     job_id,
+                    lease_token,
                     status="paused",
                     rows_written=written,
                     preview=preview_sample,
+                    lease_expires_at=None,
+                    owner_id=None,
                 )
                 db.add_event(conn, job_id, "Job paused")
         return
@@ -713,8 +762,14 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
         error_msg = str(exc)
         with eng.begin() as conn:
             job = db.load(conn, db.jobs, job_id)
-            db.update_job(
-                conn, job_id, status="failed", error_message=error_msg, finished_at=_now()
+            fenced.fenced_update(
+                conn,
+                job_id,
+                lease_token,
+                status="failed",
+                error_message=error_msg,
+                finished_at=_now(),
+                lease_expires_at=None,
             )
             db.add_event(conn, job_id, f"Failed: {exc}", level="error")
             if job:
@@ -736,9 +791,17 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
         # Parse-only: there are no distinct values, so an empty summary/counts
         # pair would just be two misleading downloads.
         if aggregator.aggregate:
-            summary = summary_path(job_id, customer)
+            summary = (
+                job["summary_file_path"]
+                if resuming_output and job.get("summary_file_path")
+                else os.path.join(attempt_root, f"job_{job_id}.summary.csv")
+            )
             aggregator.write_summary_csv(summary)
-            counts = value_counts_path(job_id, customer)
+            counts = (
+                job["counts_file_path"]
+                if resuming_output and job.get("counts_file_path")
+                else os.path.join(attempt_root, f"job_{job_id}.counts.csv")
+            )
             aggregator.write_value_counts_csv(counts)
 
     # BigQuery load — must happen before compression so we have a plain CSV
@@ -891,8 +954,26 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
                 msg += f" — parsed {snap['rows_matched']} row(s)"
             if snap["rows_unmatched"]:
                 msg += f", {snap['rows_unmatched']} row(s) didn't match the parse pattern"
-        db.update_job(conn, job_id, **final)
-        db.add_event(conn, job_id, msg)
+        # Explicit partial-completion reporting: a job that dropped work must
+        # never publish as a clean success.
+        if cp.skipped_batches:
+            final["completion_state"] = "partial"
+            final["gap_count"] = int(cp.skipped_batches)
+            final["gap_reason"] = final.get("error_message")
+        else:
+            final["completion_state"] = "complete"
+            final["gap_count"] = 0
+            final["gap_reason"] = None
+        # Publication is the commit: pointers and the terminal status land in
+        # one guarded UPDATE. If the lease was superseded, nothing is written
+        # and the previous published artifact stays authoritative.
+        published = artifacts.publish(conn, job_id, lease_token, owner_id, **final)
+        db.add_event(
+            conn,
+            job_id,
+            msg if published else "Publication refused: lease superseded",
+            level="info" if published else "warning",
+        )
         if s3_error:
             _send_alert_if_scheduled(conn, job, f"S3 upload failed: {s3_error}")
 

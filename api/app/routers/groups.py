@@ -213,6 +213,10 @@ def create_group(
             {"group_id": group.id, "label": (job.filter_spec or {}).get("label")},
             user_id=user.email,
         )
+    from app.outbox import enqueue as enqueue_dispatch
+
+    for job in jobs:
+        enqueue_dispatch(db, job.id)
     db.commit()
     db.refresh(group)
     for job in jobs:
@@ -345,6 +349,10 @@ def retry_group(
             {"from_job": original.id, "group_id": retry.id},
             user_id=user.email,
         )
+    from app.outbox import enqueue as enqueue_dispatch
+
+    for clone in clones:
+        enqueue_dispatch(db, clone.id)
     db.commit()
     db.refresh(retry)
     for clone in clones:

@@ -18,6 +18,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import * as React from "react";
 import { ImportJsonButton } from "@/components/import-json-button";
 import { Badge } from "@/components/ui/badge";
+import { completionOf } from "@/lib/completion";
 import { Button } from "@/components/ui/button";
 import {
   API_BASE,
@@ -658,6 +659,7 @@ const JobRow = React.memo(function JobRow({
       qc.invalidateQueries({ queryKey: ["jobs"] });
     },
   });
+  const completion = completionOf(job);
   return (
     <tr className={`hover:bg-accent/40 ${selected ? "bg-accent/30" : ""}`}>
       <td className="px-2 py-0.5">
@@ -679,6 +681,11 @@ const JobRow = React.memo(function JobRow({
             <span className="h-1.5 w-1.5 rounded-full bg-blue-400 animate-pulse" aria-hidden />
           )}
           <Badge tone={JOB_TONE[job.status]}>{job.status}</Badge>
+          {completion.isPartial && (
+            <Badge tone="warning" title={completion.detail ?? undefined}>
+              {completion.label}
+            </Badge>
+          )}
         </div>
       </td>
       <td

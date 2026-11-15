@@ -96,6 +96,71 @@ class Job(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # P1 ownership, lease, progress, and completion state. Populated by the
+    # worker claim/fence layer; the API only ever writes the request columns.
+    owner_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    lease_token: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    progress_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    pause_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completion_state: Mapped[str] = mapped_column(
+        String(16), default="unknown", server_default="unknown"
+    )
+    gap_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    gap_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retry_of: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # P1 artifact/checkpoint pointers: publication is recorded by these columns,
+    # not by the existence of a file.
+    store_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    spec_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    checkpoint_version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+
+
+class JobDispatchOutbox(Base):
+    """Durable dispatch intent: one row per (job, task), written with the job."""
+
+    __tablename__ = "job_dispatch_outbox"
+
+    # SQLite only autoincrements an INTEGER PRIMARY KEY, so the portability
+    # variant keeps the test database usable while Postgres gets BIGSERIAL.
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True
+    )
+    job_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    task_name: Mapped[str] = mapped_column(
+        String(80), default="logvault.run_job", server_default="logvault.run_job"
+    )
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(16), default="pending", server_default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    locked_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    locked_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
 
 class JobEvent(Base):
     __tablename__ = "job_events"

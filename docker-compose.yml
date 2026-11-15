@@ -76,14 +76,40 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    # -B embeds the beat scheduler (F1 schedules, F4 retention). For multi-worker
-    # prod, drop -B here and run one dedicated `celery beat` process instead.
+    # No -B: the scheduler is the dedicated `beat` service below.
     #
     # Slots are NOT passed as --concurrency here: the worker reads
     # WORKER_CONCURRENCY (default 4) from the environment so it can also be
     # changed live from Admin → Worker capacity without slipping back to a
     # hard-coded number on the next restart.
-    command: ["celery", "-A", "app.celery_app.celery", "worker", "-B", "--loglevel=INFO"]
+    command: ["celery", "-A", "app.celery_app.celery", "worker", "--loglevel=INFO"]
+
+  # Dedicated scheduler. Exactly one replica: beat keeps a local schedule file
+  # and two instances would double-fire every periodic task. This also keeps
+  # reconciliation and outbox publishing alive when the worker restarts.
+  beat:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-logvault}:${POSTGRES_PASSWORD:-change-me-in-production}@postgres:5432/${POSTGRES_DB:-logvault}
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./worker:/app
+      - beattmp:/tmp
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # The guard takes a Redis lock before beat starts, so a second scheduler
+    # (scale-up, stray process, rolling-deploy overlap) exits instead of
+    # double-firing every periodic task.
+    command: ["python", "-m", "app.beat_guard"]
+    restart: unless-stopped
 
   # Nightly pg_dump. Everything the platform knows lives in one volume:
   # credentials (encrypted refresh tokens included), index targets, schedules,
@@ -140,6 +166,7 @@ services:
     command: ["npm", "run", "dev"]
 
 volumes:
+  beattmp:
   pgdata:
   redisdata:
   exports:

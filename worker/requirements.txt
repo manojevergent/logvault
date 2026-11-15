@@ -5,7 +5,7 @@ SQLAlchemy==2.0.36
 psycopg[binary]==3.2.3
 pydantic==2.10.4
 pydantic-settings==2.7.1
-cryptography==44.0.0
+cryptography==50.0.0
 httpx==0.28.1
 structlog==24.4.0
 # Pinned: kombu 5.7 requires redis-py >= 6.1, but this app pins redis 5.2.1.

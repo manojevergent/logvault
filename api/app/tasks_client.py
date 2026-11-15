@@ -31,6 +31,23 @@ def _stats() -> dict:
         return {}
 
 
+def worker_ping(timeout: float = 1.5) -> bool | None:
+    """True when at least one Celery worker answers a control ping.
+
+    This is a live broker round-trip, deliberately independent of the beat
+    heartbeat: a healthy scheduler says nothing about the worker pool. Returns
+    None when the answer cannot be established (broker down, timeout), which
+    callers must report as unknown rather than as a healthy or dead worker.
+    """
+    try:
+        replies = _celery().control.inspect(timeout=timeout).ping()
+    except Exception:  # noqa: BLE001 - a broker hiccup is not a worker verdict
+        return None
+    if replies is None:
+        return False
+    return bool(replies)
+
+
 def _control():
     """The Celery control channel (patched in tests)."""
     return _celery().control

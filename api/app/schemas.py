@@ -408,6 +408,11 @@ class JobOut(BaseModel):
     completed_chunks: int
     current_chunk_start: int | None
     error_message: str | None
+    # Release 1 partial-completion reporting. Defaults keep older consumers and
+    # pre-P1 rows behaving exactly as before.
+    completion_state: str = "unknown"
+    gap_count: int = 0
+    gap_reason: str | None = None
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None

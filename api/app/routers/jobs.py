@@ -47,6 +47,7 @@ from app.schemas import (
     RollupCreate,
     S3ProfileRef,
 )
+from app.outbox import enqueue as enqueue_dispatch
 from app.tasks_client import dispatch_job, dispatch_s3_upload
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -321,6 +322,7 @@ def create_job(
         created_by=user.email,
     )
     audit.record(db, "create", "job", job.id, {"region": job.region_code}, user_id=user.email)
+    enqueue_dispatch(db, job.id)
     db.commit()
     db.refresh(job)
     dispatch_job(job.id)
@@ -471,6 +473,8 @@ def create_batch(
             {"region": job.region_code, "batch": tpl.name},
             user_id=user.email,
         )
+    for job in jobs:
+        enqueue_dispatch(db, job.id)
     db.commit()
     for job in jobs:
         db.refresh(job)
@@ -649,6 +653,7 @@ def create_rollup(
     audit.record(
         db, "create", "rollup", job.id, {"schedule_id": body.schedule_id}, user_id=user.email
     )
+    enqueue_dispatch(db, job.id)
     db.commit()
     db.refresh(job)
     dispatch_job(job.id)
@@ -843,6 +848,7 @@ def resume_job(job_id: int, db: Session = Depends(get_db)) -> JobOut:
     if job.status != "paused":
         raise HTTPException(status.HTTP_409_CONFLICT, f"cannot resume a {job.status} job")
     job.status = "queued"
+    enqueue_dispatch(db, job.id)
     db.commit()
     db.refresh(job)
     dispatch_job(job.id)  # resumes from checkpoint
@@ -997,6 +1003,7 @@ def retry_job(
     db.add(job)
     db.flush()
     audit.record(db, "retry", "job", job.id, {"from_job": job_id}, user_id=user.email)
+    enqueue_dispatch(db, job.id)
     db.commit()
     db.refresh(job)
     dispatch_job(job.id)

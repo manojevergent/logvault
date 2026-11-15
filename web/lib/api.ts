@@ -266,6 +266,11 @@ export type Job = {
   id: number;
   group_id?: number | null;
   status: JobStatus;
+  /** Release 1: "complete" | "partial" | "unknown". Absent on older API versions. */
+  completion_state?: string | null;
+  /** Number of skipped batches when completion_state is "partial". */
+  gap_count?: number | null;
+  gap_reason?: string | null;
   region_code: string;
   index_target_id: number;
   credential_id: number;
