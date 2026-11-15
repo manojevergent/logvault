@@ -625,7 +625,10 @@ production authorisation.
 
 A real extraction was executed on the candidate itself: commit `7f2ac46`,
 schema `0034`, worker `sha256:f96fac9f…f224fbb`, API `sha256:78f7f987…6396bb`,
-on disposable PostgreSQL 16 and Redis (destroyed afterwards).
+on disposable PostgreSQL 16 and Redis (destroyed afterwards). The org used,
+`evergentapse1`, was confirmed by the product owner on 15 November 2026 as the
+authorised org for non-production testing (owner attestation, not independently
+verified).
 
 | Check | Result |
 |---|---|

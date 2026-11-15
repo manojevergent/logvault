@@ -20,11 +20,12 @@ afterwards:
 - PostgreSQL 16 and Redis 7, fresh volumes;
 - database migrated to **schema `0034`** with the candidate API image;
 - API (`78f7f987…`), worker and beat (`f96fac9f…`) from the candidate images;
-- the existing configured Last9 connection (org `evergentapse1`, index
-  `UMServices`, region `ap-southeast-1`) was copied into the disposable database
-  inside a container, re-encrypted with the disposable key; the plaintext token
-  was never printed or written to a file, and the database volume was deleted at
-  the end;
+- the existing configured Last9 connection (org `evergentapse1` — confirmed by
+  the product owner on 15 November 2026 as the authorised non-production org —
+  index `UMServices`, region `ap-southeast-1`) was copied into the disposable
+  database inside a container, re-encrypted with the disposable key; the
+  plaintext token was never printed or written to a file, and the database
+  volume was deleted at the end;
 - no production system was contacted other than the Last9 query API that the
   application already uses for these credentials.
 
@@ -87,8 +88,9 @@ scheduled execution, a hard failure with a clear message, and manual retry —
 with the fix4 worker and schema `0034`.
 
 The org used (`evergentapse1`) is the one already configured in this workspace.
-The owner classifies this activity as non-production; that classification is the
-owner's and is not independently verified here.
+On 15 November 2026 the product owner confirmed that `evergentapse1` is the
+authorised org for non-production testing. That confirmation is an owner
+attestation; no independent party verified the org's environment class.
 
 Not covered by this run:
 
