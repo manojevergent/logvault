@@ -177,6 +177,10 @@ export default function NewJobPage() {
   // UTC by default: the application timestamps its logs in UTC, so a range
   // typed in UTC is the one that lines up with what's actually in the index.
   const [tz, setTz] = React.useState<Tz>("UTC");
+  // Default CSV timestamp header for this job's timezone: UTC exports use
+  // `timestamp`; IST exports use `timestamp_ist`. A header the user typed is
+  // left alone (see the effect below).
+  const defaultTimestampHeader = tz === "IST" ? "timestamp_ist" : "timestamp";
   const [preset, setPreset] = React.useState<number | "custom">(3600);
   const nowSec = Math.floor(Date.now() / 1000);
   const [customStart, setCustomStart] = React.useState(epochToLocal(nowSec - 3600, "UTC"));
@@ -319,7 +323,7 @@ export default function NewJobPage() {
       setColSeq(seq);
       setColLabels({ ...(agg.column_labels ?? {}) });
       setColDefaults({ ...(agg.raw_column_defaults ?? {}) });
-      setTimestampHeader(agg.timestamp_column ?? "timestamp_utc");
+      setTimestampHeader(agg.timestamp_column ?? defaultTimestampHeader);
       setIncludeLogFormat(agg.include_log_format ?? true);
       setIncludeMessageColumn(agg.include_message ?? true);
     } else {
@@ -327,7 +331,7 @@ export default function NewJobPage() {
       setColSeq({});
       setColLabels({});
       setColDefaults({});
-      setTimestampHeader("timestamp_utc");
+      setTimestampHeader(defaultTimestampHeader);
       setIncludeLogFormat(true);
       setIncludeMessageColumn(true);
     }
@@ -363,7 +367,7 @@ export default function NewJobPage() {
             include_message: includeMessageColumn,
             column_labels: columnLabels,
             raw_column_defaults: columnDefaults,
-            timestamp_column: timestampHeader.trim() || "timestamp_utc",
+            timestamp_column: timestampHeader.trim() || defaultTimestampHeader,
           }
         : null,
     };
@@ -598,13 +602,23 @@ export default function NewJobPage() {
   const [colSeq, setColSeq] = React.useState<Record<string, number>>({});
   const [colLabels, setColLabels] = React.useState<Record<string, string>>({});
   const [colDefaults, setColDefaults] = React.useState<Record<string, string>>({});
-  const [timestampHeader, setTimestampHeader] = React.useState("timestamp_utc");
+  const [timestampHeader, setTimestampHeader] = React.useState(defaultTimestampHeader);
   // log_format (which pattern matched) and message (the raw line) are the two
   // columns that AREN'T a regex field — kept as their own toggles rather than
   // folded into the checklist above, since nothing to check them against
   // exists until a regex is typed.
   const [includeLogFormat, setIncludeLogFormat] = React.useState(true);
   const [includeMessageColumn, setIncludeMessageColumn] = React.useState(true);
+
+  // Keep the default header in step with the timezone choice. Only the three
+  // known defaults change; a header the user typed is preserved.
+  React.useEffect(() => {
+    setTimestampHeader((prev) =>
+      prev === "timestamp" || prev === "timestamp_ist" || prev === "timestamp_utc"
+        ? defaultTimestampHeader
+        : prev
+    );
+  }, [defaultTimestampHeader]);
 
   const groupBy = React.useMemo(() => splitFieldNames(groupByText), [groupByText]);
   const uniqueFields = React.useMemo(() => splitFieldNames(uniqueFieldsText), [uniqueFieldsText]);
@@ -670,7 +684,9 @@ export default function NewJobPage() {
     });
     setColSeq(seq);
     setColLabels(layout.columnLabels);
-    setTimestampHeader(layout.timestampColumn);
+    // The uniform layout's default is the UTC header; honour the selected
+    // timezone instead (timestamp vs timestamp_ist).
+    setTimestampHeader(defaultTimestampHeader);
     setIncludedFieldsOverride(new Set(layout.rawColumns));
     // A uniform extract is parsed fields only — drop the synthetic columns.
     setIncludeLogFormat(false);
@@ -718,7 +734,7 @@ export default function NewJobPage() {
     setColSeq({});
     setColLabels({});
     setColDefaults({});
-    setTimestampHeader("timestamp_utc");
+    setTimestampHeader(defaultTimestampHeader);
     setIncludeLogFormat(true);
     setIncludeMessageColumn(true);
   }
@@ -821,7 +837,7 @@ export default function NewJobPage() {
       setColSeq(seq);
       setColLabels({ ...(agg.column_labels ?? {}) });
       setColDefaults({ ...(agg.raw_column_defaults ?? {}) });
-      setTimestampHeader(agg.timestamp_column ?? "timestamp_utc");
+      setTimestampHeader(agg.timestamp_column ?? defaultTimestampHeader);
       setIncludeLogFormat(agg.include_log_format ?? true);
       setIncludeMessageColumn(agg.include_message ?? true);
     }
@@ -928,7 +944,7 @@ export default function NewJobPage() {
               include_message: includeMessageColumn,
               column_labels: columnLabels,
               raw_column_defaults: columnDefaults,
-              timestamp_column: timestampHeader.trim() || "timestamp_utc",
+              timestamp_column: timestampHeader.trim() || defaultTimestampHeader,
             }
           : null,
       }),
