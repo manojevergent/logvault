@@ -96,7 +96,7 @@ def _render_alert_html(subject: str, body: str) -> str:
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;border:1px solid #eef2f7;border-radius:0;">
 <tr><td style="padding:14px 16px;color:#64748b;font-size:12px;line-height:1.6;">
 Automated alert from LogVault &middot; {stamp}<br>
-Manage thresholds and recipients in Admin &rarr; Notifications.
+Manage alert thresholds and recipients in LogVault.
 </td></tr>
 </table>
 </td></tr>
@@ -166,6 +166,7 @@ def send_failure_alert(
     schedule_name: str,
     job_id: int,
     error_message: str,
+    customer: str = "",
 ) -> None:
     """Send email + Slack notification for a failed job (sync).
 
@@ -175,13 +176,17 @@ def send_failure_alert(
 
     if recipients and cfg["smtp_host"] and cfg["smtp_user"]:
         try:
-            _retry(lambda: _send_email(cfg, recipients, schedule_name, job_id, error_message))
+            _retry(
+                lambda: _send_email(
+                    cfg, recipients, schedule_name, job_id, error_message, customer
+                )
+            )
         except Exception as exc:
             print(f"[email.final_error] {exc}", file=sys.stderr)
 
     if cfg["slack_webhook_url"]:
         try:
-            _retry(lambda: _send_slack(cfg, schedule_name, job_id, error_message))
+            _retry(lambda: _send_slack(cfg, schedule_name, job_id, error_message, customer))
         except Exception as exc:
             print(f"[slack.final_error] {exc}", file=sys.stderr)
 
@@ -192,14 +197,17 @@ def _send_email(
     schedule_name: str,
     job_id: int,
     error_message: str,
+    customer: str = "",
 ) -> None:
     """Send email to recipients."""
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"LogVault: Schedule '{schedule_name}' failed (Job {job_id})"
+    who = f"[{customer}] " if customer else ""
+    msg["Subject"] = f"LogVault: {who}Schedule '{schedule_name}' failed (Job {job_id})"
     msg["From"] = cfg["smtp_from"]
     msg["To"] = ", ".join(recipients)
 
     text = f"""Schedule '{schedule_name}' (Job {job_id}) failed.
+Customer: {customer or "(unassigned)"}
 
 Error: {error_message}
 
@@ -225,6 +233,7 @@ def _send_slack(
     schedule_name: str,
     job_id: int,
     error_message: str,
+    customer: str = "",
 ) -> None:
     """Send Slack notification (sync)."""
     payload = {
@@ -234,7 +243,12 @@ def _send_slack(
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"*Schedule:* {schedule_name}\n*Job ID:* {job_id}\n*Error:* {error_message}",
+                    "text": (
+                        f"*Customer:* {customer or '(unassigned)'}\n"
+                        f"*Schedule:* {schedule_name}\n"
+                        f"*Job ID:* {job_id}\n"
+                        f"*Error:* {error_message}"
+                    ),
                 },
             }
         ],
@@ -242,6 +256,66 @@ def _send_slack(
 
     httpx.post(cfg["slack_webhook_url"], json=payload, timeout=10)
     print(f"[slack.sent] schedule={schedule_name}, job={job_id}")
+
+
+def send_anomaly_alert(
+    recipients: list[str],
+    schedule_name: str,
+    job_id: int,
+    customer: str,
+    *,
+    reasons: list[str],
+    current_rows: int,
+    previous_rows: int | None,
+    drop_pct: float | None,
+    rows_unmatched: int,
+    parsed_rows: int,
+    unmatched_pct: float | None,
+    row_drop_threshold_pct: int,
+    unmatched_threshold: int,
+) -> None:
+    """Send an anomaly alert for a completed scheduled run.
+
+    Email goes to the schedule's recipients; Slack uses the global webhook, so
+    a team can receive anomalies there even when no per-schedule email address
+    has been configured.
+    """
+    cfg = load_config()
+    who = f"[{customer}] " if customer else ""
+    subject = f"LogVault: {who}Schedule '{schedule_name}' anomaly (Job {job_id})"
+
+    details = [
+        f"Schedule '{schedule_name}' (Job {job_id}) completed with an anomaly.",
+        f"Customer: {customer or '(unassigned)'}",
+        f"Rows written: {current_rows:,}",
+        f"Previous run: {previous_rows:,}" if previous_rows is not None else "Previous run: n/a",
+    ]
+    if drop_pct is not None:
+        details.append(f"Row change: {drop_pct:+.1f}%")
+        details.append(f"Row-drop threshold: {row_drop_threshold_pct}%")
+    if parsed_rows:
+        details.append(f"Unmatched rows: {rows_unmatched:,} of {parsed_rows:,} parsed")
+        if unmatched_pct is not None:
+            details.append(f"Unmatched share: {unmatched_pct:.2f}%")
+        details.append(f"Unmatched threshold: {unmatched_threshold:,} rows")
+    body = (
+        "\n".join(details)
+        + "\n\nReasons:\n"
+        + "\n".join(f"- {reason}" for reason in reasons)
+        + "\n\nCheck the job details at the LogVault dashboard."
+    )
+
+    if recipients and cfg["smtp_host"] and cfg["smtp_user"]:
+        try:
+            _retry(lambda: _send_plain_email(cfg, recipients, subject, body))
+        except Exception as exc:
+            print(f"[email.final_error] {exc}", file=sys.stderr)
+
+    if cfg["slack_webhook_url"]:
+        try:
+            _retry(lambda: _send_slack_text(cfg["slack_webhook_url"], subject, body))
+        except Exception as exc:
+            print(f"[slack.final_error] {exc}", file=sys.stderr)
 
 
 def send_health_alert(
@@ -344,7 +418,7 @@ def _send_plain_email(cfg: dict, recipients: list[str], subject: str, body: str)
         server.sendmail(cfg["smtp_from"], recipients, msg.as_string())
     finally:
         server.quit()
-    print(f"[email.health_sent] subject={subject}, recipients={recipients}")
+    print(f"[email.sent] subject={subject}, recipients={recipients}")
 
 
 def _send_slack_text(webhook: str, subject: str, body: str) -> None:

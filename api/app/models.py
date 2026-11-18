@@ -211,6 +211,12 @@ class Schedule(Base):
     alert_recipients: Mapped[list] = mapped_column(
         JSON, default=list
     )  # email addresses to notify on failure
+    # Anomaly alerts, evaluated once when a scheduled run completes. Both are
+    # opt-in so enabling the feature never starts paging existing schedules.
+    alert_on_row_drop: Mapped[bool] = mapped_column(Boolean, default=False)
+    row_drop_threshold_pct: Mapped[int] = mapped_column(Integer, default=20)
+    alert_on_unmatched: Mapped[bool] = mapped_column(Boolean, default=False)
+    unmatched_threshold: Mapped[int] = mapped_column(Integer, default=100)
     bq_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

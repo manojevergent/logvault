@@ -741,6 +741,10 @@ export type Schedule = {
   last_run_job_id: number | null;
   bq_config: BQConfig | null;
   alert_recipients: string[];
+  alert_on_row_drop: boolean;
+  row_drop_threshold_pct: number;
+  alert_on_unmatched: boolean;
+  unmatched_threshold: number;
   s3_profile_id: number | null;
   s3_profile_label: string | null;
 };
@@ -768,6 +772,10 @@ export type ScheduleInput = {
   /** BigQuery destination config; null = no BQ load */
   bq_config?: BQConfig | null;
   alert_recipients?: string[];
+  alert_on_row_drop?: boolean;
+  row_drop_threshold_pct?: number;
+  alert_on_unmatched?: boolean;
+  unmatched_threshold?: number;
   s3_profile_id?: number | null;
 };
 
@@ -795,6 +803,10 @@ export const updateSchedule = (
     phrases?: string[];
     ids?: string[];
     alert_recipients?: string[];
+    alert_on_row_drop?: boolean;
+    row_drop_threshold_pct?: number;
+    alert_on_unmatched?: boolean;
+    unmatched_threshold?: number;
     bq_config?: BQConfig | null;
     s3_profile_id?: number | null;
   }

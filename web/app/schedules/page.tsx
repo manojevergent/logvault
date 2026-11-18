@@ -326,12 +326,20 @@ function EditScheduleForm({ s, onDone }: { s: Schedule; onDone: () => void }) {
     calendar_day: s.calendar_day,
     s3_profile_id: (s.s3_profile_id ?? "") as number | "",
     alert_recipients: (s.alert_recipients ?? []).join(", "),
+    alert_on_row_drop: s.alert_on_row_drop ?? false,
+    row_drop_threshold_pct: s.row_drop_threshold_pct ?? 20,
+    alert_on_unmatched: s.alert_on_unmatched ?? false,
+    unmatched_threshold: s.unmatched_threshold ?? 100,
     bq_project_id: s.bq_config?.project_id ?? "",
     bq_dataset_id: s.bq_config?.dataset_id ?? "",
     bq_table_id: s.bq_config?.table_id ?? "",
     bq_credentials_json: s.bq_config?.credentials_json ?? "",
   });
   const hasBqConfig = f.bq_project_id || f.bq_dataset_id || f.bq_table_id;
+  const validThresholds =
+    (!f.alert_on_row_drop ||
+      (f.row_drop_threshold_pct >= 1 && f.row_drop_threshold_pct <= 100)) &&
+    (!f.alert_on_unmatched || f.unmatched_threshold >= 1);
   const save = useMutation({
     mutationFn: () =>
       updateSchedule(s.id, {
@@ -344,6 +352,10 @@ function EditScheduleForm({ s, onDone }: { s: Schedule; onDone: () => void }) {
           .split(/[,\s]+/)
           .map((e) => e.trim())
           .filter(Boolean),
+        alert_on_row_drop: f.alert_on_row_drop,
+        row_drop_threshold_pct: f.row_drop_threshold_pct,
+        alert_on_unmatched: f.alert_on_unmatched,
+        unmatched_threshold: f.unmatched_threshold,
         bq_config: hasBqConfig
           ? {
               project_id: f.bq_project_id,
@@ -421,6 +433,13 @@ function EditScheduleForm({ s, onDone }: { s: Schedule; onDone: () => void }) {
           placeholder="ops@example.com, alerts@example.com"
         />
       </div>
+      <AlertThresholds
+        alertOnRowDrop={f.alert_on_row_drop}
+        rowDropThresholdPct={f.row_drop_threshold_pct}
+        alertOnUnmatched={f.alert_on_unmatched}
+        unmatchedThreshold={f.unmatched_threshold}
+        onChange={(patch) => setF({ ...f, ...patch })}
+      />
       <div className="sm:col-span-3">
         <p className="mb-2 text-xs font-medium text-muted-foreground">
           BigQuery destination (optional)
@@ -470,7 +489,11 @@ function EditScheduleForm({ s, onDone }: { s: Schedule; onDone: () => void }) {
         Full day (00:00–23:59 UTC) instead of a rolling window
       </label>
       <div className="flex items-center gap-2 sm:col-span-3">
-        <Button size="sm" disabled={save.isPending} onClick={() => save.mutate()}>
+        <Button
+          size="sm"
+          disabled={save.isPending || !validThresholds}
+          onClick={() => save.mutate()}
+        >
           {save.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
           Save
         </Button>
@@ -508,6 +531,10 @@ function AddScheduleForm({ onDone }: { onDone: () => void }) {
     exclude_phrases: "",
     exclude_exact_phrases: "",
     alert_recipients: "",
+    alert_on_row_drop: false,
+    row_drop_threshold_pct: 20,
+    alert_on_unmatched: false,
+    unmatched_threshold: 100,
     bq_project_id: "",
     bq_dataset_id: "",
     bq_table_id: "",
@@ -576,6 +603,10 @@ function AddScheduleForm({ onDone }: { onDone: () => void }) {
           .split(/[,\s]+/)
           .map((e) => e.trim())
           .filter(Boolean),
+        alert_on_row_drop: f.alert_on_row_drop,
+        row_drop_threshold_pct: f.row_drop_threshold_pct,
+        alert_on_unmatched: f.alert_on_unmatched,
+        unmatched_threshold: f.unmatched_threshold,
         s3_profile_id: s3ProfileId === "" ? null : Number(s3ProfileId),
         bq_config: bqEnabled
           ? {
@@ -594,7 +625,13 @@ function AddScheduleForm({ onDone }: { onDone: () => void }) {
     },
   });
 
-  const valid = f.name && f.credential_id !== "" && f.index_target_id !== "";
+  const valid =
+    f.name &&
+    f.credential_id !== "" &&
+    f.index_target_id !== "" &&
+    (!f.alert_on_row_drop ||
+      (f.row_drop_threshold_pct >= 1 && f.row_drop_threshold_pct <= 100)) &&
+    (!f.alert_on_unmatched || f.unmatched_threshold >= 1);
 
   return (
     <Card className="mb-6">
@@ -832,6 +869,13 @@ function AddScheduleForm({ onDone }: { onDone: () => void }) {
             placeholder="ops@example.com, alerts@example.com"
           />
         </Field>
+        <AlertThresholds
+          alertOnRowDrop={f.alert_on_row_drop}
+          rowDropThresholdPct={f.row_drop_threshold_pct}
+          alertOnUnmatched={f.alert_on_unmatched}
+          unmatchedThreshold={f.unmatched_threshold}
+          onChange={(patch) => setF({ ...f, ...patch })}
+        />
         <div className="sm:col-span-2">
           <Button disabled={!valid || create.isPending} onClick={() => create.mutate()}>
             {create.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
@@ -843,6 +887,79 @@ function AddScheduleForm({ onDone }: { onDone: () => void }) {
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+type AlertThresholdPatch = {
+  alert_on_row_drop?: boolean;
+  row_drop_threshold_pct?: number;
+  alert_on_unmatched?: boolean;
+  unmatched_threshold?: number;
+};
+
+function AlertThresholds({
+  alertOnRowDrop,
+  rowDropThresholdPct,
+  alertOnUnmatched,
+  unmatchedThreshold,
+  onChange,
+}: {
+  alertOnRowDrop: boolean;
+  rowDropThresholdPct: number;
+  alertOnUnmatched: boolean;
+  unmatchedThreshold: number;
+  onChange: (patch: AlertThresholdPatch) => void;
+}) {
+  return (
+    <div className="col-span-full border border-border p-3">
+      <p className="text-sm font-medium">Anomaly alerts</p>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Evaluated once when a scheduled run completes. Recipients are the alert recipients above.
+      </p>
+      <div className="mt-3 space-y-3">
+        <label className="flex flex-wrap items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={alertOnRowDrop}
+            onChange={(e) => onChange({ alert_on_row_drop: e.target.checked })}
+          />
+          <span>Row-count drop</span>
+          <span className="text-muted-foreground">alert when rows are at least</span>
+          <Input
+            type="number"
+            min={1}
+            max={100}
+            className="w-20"
+            value={rowDropThresholdPct}
+            disabled={!alertOnRowDrop}
+            onChange={(e) => onChange({ row_drop_threshold_pct: Number(e.target.value) })}
+          />
+          <span className="text-muted-foreground">% below the previous completed run</span>
+        </label>
+        <label className="flex flex-wrap items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={alertOnUnmatched}
+            onChange={(e) => onChange({ alert_on_unmatched: e.target.checked })}
+          />
+          <span>Unmatched rows</span>
+          <span className="text-muted-foreground">alert when at least</span>
+          <Input
+            type="number"
+            min={1}
+            className="w-24"
+            value={unmatchedThreshold}
+            disabled={!alertOnUnmatched}
+            onChange={(e) => onChange({ unmatched_threshold: Number(e.target.value) })}
+          />
+          <span className="text-muted-foreground">rows do not match the parse pattern</span>
+        </label>
+        <p className="text-xs text-muted-foreground">
+          Unmatched-row alerts apply only when the schedule has a parse pattern (usually from a
+          saved search).
+        </p>
+      </div>
+    </div>
   );
 }
 

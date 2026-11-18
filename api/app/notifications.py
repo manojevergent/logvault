@@ -101,7 +101,7 @@ def _render_alert_html(subject: str, body: str) -> str:
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;border:1px solid #eef2f7;border-radius:0;">
 <tr><td style="padding:14px 16px;color:#64748b;font-size:12px;line-height:1.6;">
 Automated alert from LogVault &middot; {stamp}<br>
-Manage thresholds and recipients in Admin &rarr; Notifications.
+Manage alert thresholds and recipients in LogVault.
 </td></tr>
 </table>
 </td></tr>

@@ -626,6 +626,10 @@ class ScheduleCreate(BaseModel):
     aggregation: AggregationSpec | None = None
     customer: str = ""
     alert_recipients: list[str] = []
+    alert_on_row_drop: bool = False
+    row_drop_threshold_pct: int = Field(default=20, ge=1, le=100)
+    alert_on_unmatched: bool = False
+    unmatched_threshold: int = Field(default=100, ge=1)
     bq_config: BQConfig | None = None
     s3_profile_id: int | None = None
 
@@ -641,6 +645,10 @@ class ScheduleUpdate(BaseModel):
     exclude_exact_phrases: list[str] | None = None
     aggregation: AggregationSpec | None = None
     alert_recipients: list[str] | None = None
+    alert_on_row_drop: bool | None = None
+    row_drop_threshold_pct: int | None = Field(default=None, ge=1, le=100)
+    alert_on_unmatched: bool | None = None
+    unmatched_threshold: int | None = Field(default=None, ge=1)
     bq_config: BQConfig | None = None
     s3_profile_id: int | None = None
 
@@ -662,6 +670,10 @@ class ScheduleOut(BaseModel):
     output_format: str
     filter_spec: dict
     alert_recipients: list[str]
+    alert_on_row_drop: bool
+    row_drop_threshold_pct: int
+    alert_on_unmatched: bool
+    unmatched_threshold: int
     bq_config: BQConfig | None = None
     s3_profile_id: int | None = None
     s3_profile_label: str | None = None
@@ -695,6 +707,10 @@ class ScheduleExport(BaseModel):
     customer: str = ""
     aggregation: AggregationSpec | None = None
     alert_recipients: list[str] = []
+    alert_on_row_drop: bool = False
+    row_drop_threshold_pct: int = Field(default=20, ge=1, le=100)
+    alert_on_unmatched: bool = False
+    unmatched_threshold: int = Field(default=100, ge=1)
     bq_config: BQConfig | None = None
     s3_profile: S3ProfileRef | None = None
 

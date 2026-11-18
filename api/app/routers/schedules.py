@@ -90,6 +90,10 @@ def create_schedule(
         filter_spec=filter_spec,
         s3_profile_id=s3_profile.id if s3_profile else None,
         alert_recipients=body.alert_recipients,
+        alert_on_row_drop=body.alert_on_row_drop,
+        row_drop_threshold_pct=body.row_drop_threshold_pct,
+        alert_on_unmatched=body.alert_on_unmatched,
+        unmatched_threshold=body.unmatched_threshold,
         bq_config=body.bq_config.model_dump() if body.bq_config else None,
     )
     db.add(sched)
@@ -188,6 +192,10 @@ def import_schedule(body: ScheduleExport, db: Session = Depends(get_db)) -> Sche
         aggregation=body.aggregation,
         customer=body.customer,
         alert_recipients=body.alert_recipients,
+        alert_on_row_drop=body.alert_on_row_drop,
+        row_drop_threshold_pct=body.row_drop_threshold_pct,
+        alert_on_unmatched=body.alert_on_unmatched,
+        unmatched_threshold=body.unmatched_threshold,
         bq_config=body.bq_config,
         s3_profile_id=s3_profile.id if s3_profile else None,
     )
@@ -228,6 +236,10 @@ def export_schedule(sid: int, db: Session = Depends(get_db)) -> ScheduleExport:
         customer=fs.get("customer", ""),
         aggregation=fs.get("aggregation"),
         alert_recipients=s.alert_recipients,
+        alert_on_row_drop=s.alert_on_row_drop,
+        row_drop_threshold_pct=s.row_drop_threshold_pct,
+        alert_on_unmatched=s.alert_on_unmatched,
+        unmatched_threshold=s.unmatched_threshold,
         bq_config=BQConfig(**s.bq_config) if s.bq_config else None,
         s3_profile=S3ProfileRef(name=s3_profile.name) if s3_profile else None,
     )
@@ -246,6 +258,14 @@ def update_schedule(sid: int, body: ScheduleUpdate, db: Session = Depends(get_db
         s.calendar_day = body.calendar_day
     if body.alert_recipients is not None:
         s.alert_recipients = body.alert_recipients
+    if body.alert_on_row_drop is not None:
+        s.alert_on_row_drop = body.alert_on_row_drop
+    if body.row_drop_threshold_pct is not None:
+        s.row_drop_threshold_pct = body.row_drop_threshold_pct
+    if body.alert_on_unmatched is not None:
+        s.alert_on_unmatched = body.alert_on_unmatched
+    if body.unmatched_threshold is not None:
+        s.unmatched_threshold = body.unmatched_threshold
     if body.bq_config is not None:
         s.bq_config = body.bq_config.model_dump()
     if "s3_profile_id" in body.model_fields_set:

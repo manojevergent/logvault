@@ -222,11 +222,13 @@ def _run_rollup_case(
 def _seed_schedule_alerts(wdb, schedule_id: int = 7, recipients: str = "ops@example.com") -> None:
     """Give schedule 7 an alert recipient so a failure path would email someone.
 
-    The worker's mirrored ``schedules`` table omits ``alert_recipients``; the
-    production table has it and the rollup's failure paths read it directly.
+    The worker mirror now includes ``alert_recipients``. Older/stale test tables
+    may not, so add it only when the column is actually missing.
     """
     with wdb.engine().begin() as conn:
-        conn.exec_driver_sql("ALTER TABLE schedules ADD COLUMN alert_recipients VARCHAR(500)")
+        columns = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(schedules)")}
+        if "alert_recipients" not in columns:
+            conn.exec_driver_sql("ALTER TABLE schedules ADD COLUMN alert_recipients VARCHAR(500)")
         conn.exec_driver_sql(
             "INSERT INTO schedules (id, name, alert_recipients) VALUES (?, ?, ?)",
             (schedule_id, "nightly", recipients),

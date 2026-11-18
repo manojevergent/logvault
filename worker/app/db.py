@@ -125,6 +125,11 @@ schedules = Table(
     Column("output_format", String(10)),
     Column("filter_spec", JSON),
     Column("s3_profile_id", Integer),
+    Column("alert_recipients", JSON),
+    Column("alert_on_row_drop", Boolean),
+    Column("row_drop_threshold_pct", Integer),
+    Column("alert_on_unmatched", Boolean),
+    Column("unmatched_threshold", Integer),
     Column("bq_config", JSON),
     Column("last_run_at", DateTime(timezone=True)),
 )
