@@ -15,6 +15,13 @@ cd "$(dirname "$0")"
 SERVICES="${*:-api worker web}"
 COMPOSE="docker compose -f docker-compose.yml -f docker-compose.prod.yml"
 
+# beat runs the worker image, so rebuilding worker without recreating beat
+# leaves the scheduler on the previous build. Follow worker automatically.
+if echo "$SERVICES" | tr ' ' '\n' | grep -qx worker \
+   && ! echo "$SERVICES" | tr ' ' '\n' | grep -qx beat; then
+  SERVICES="$SERVICES beat"
+fi
+
 echo "Building: $SERVICES"
 $COMPOSE build $SERVICES
 

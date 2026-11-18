@@ -8,6 +8,10 @@
 # compiled build instead.
 services:
   api:
+    # Own tag, for the same reason as web below: a prod build otherwise
+    # overwrites `last9_web_app-api`, and the next plain `docker compose up`
+    # (dev shape) recreates the dev container from a prod image.
+    image: last9_web_app-api:prod
     volumes: !override
       - exports:/data/exports      # keeps exports, drops the ./api bind mount
       - ${BACKUP_DIR:-./backups}:/backups:ro
@@ -16,10 +20,20 @@ services:
     restart: unless-stopped
 
   worker:
+    image: last9_web_app-worker:prod
     volumes: !override
       - exports:/data/exports
     # No --concurrency here either: WORKER_CONCURRENCY (default 4) governs it,
     # both at startup and as the target for the live resize in Admin.
+    restart: unless-stopped
+
+  beat:
+    # Runs the worker image: beat only enqueues, but a scheduler on a different
+    # revision than the worker it feeds is not something to debug in prod.
+    # Without this it keeps the dev `./worker` bind mount in a prod deploy.
+    image: last9_web_app-worker:prod
+    volumes: !override
+      - beattmp:/tmp
     restart: unless-stopped
 
   web:
