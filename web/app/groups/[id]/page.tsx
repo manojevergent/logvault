@@ -1,22 +1,25 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Download, Loader2, RefreshCw, X } from "lucide-react";
+import { ArrowLeft, Download, Loader2, PencilLine, RefreshCw, X } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import * as React from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { RerunGroupDialog } from "@/components/rerun-group-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   API_BASE,
   GroupDetail,
+  GroupRerunInput,
   GroupStatus,
   Job,
   cancelGroup,
   getGroup,
   listIndexes,
+  rerunGroup,
   retryGroup,
 } from "@/lib/api";
 import { formatEpoch } from "@/lib/time";
@@ -110,6 +113,7 @@ export default function GroupDetailPage() {
   const router = useRouter();
   const qc = useQueryClient();
   const [confirmCancel, setConfirmCancel] = React.useState(false);
+  const [rerunOpen, setRerunOpen] = React.useState(false);
 
   const group = useQuery({
     queryKey: ["group", id],
@@ -130,6 +134,14 @@ export default function GroupDetailPage() {
   const retry = useMutation({
     mutationFn: () => retryGroup(id),
     onSuccess: (created) => {
+      qc.invalidateQueries({ queryKey: ["groups"] });
+      router.push(`/groups/${created.id}`);
+    },
+  });
+  const rerun = useMutation({
+    mutationFn: (body: GroupRerunInput) => rerunGroup(id, body),
+    onSuccess: (created) => {
+      setRerunOpen(false);
       qc.invalidateQueries({ queryKey: ["groups"] });
       router.push(`/groups/${created.id}`);
     },
@@ -210,6 +222,16 @@ export default function GroupDetailPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={rerun.isPending || data.total_jobs === 0}
+            onClick={() => setRerunOpen(true)}
+            title="Re-run these searches with an edited window and settings"
+          >
+            <PencilLine className="h-3.5 w-3.5" />
+            Re-run with edit
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -323,10 +345,25 @@ export default function GroupDetailPage() {
 
       <p className="mt-2 text-[11px] leading-5 text-muted-foreground">
         Each search runs as its own job against the index saved with it, so one failure never stops
-        the others. Retry failed creates a new group with only the failed/canceled searches; the
-        original group and its files stay intact. Cancel stops active jobs and keeps whatever they
-        already wrote as partial output.
+        the others. Retry failed creates a new group with only the failed/canceled searches; Re-run
+        with edit repeats any selection of these searches over a new window or with different run
+        settings. Either way the original group and its files stay intact. Cancel stops active jobs
+        and keeps whatever they already wrote as partial output.
       </p>
+
+      <RerunGroupDialog
+        open={rerunOpen}
+        group={data}
+        pending={rerun.isPending}
+        error={rerun.isError ? (rerun.error as Error).message : null}
+        onSubmit={(body) => rerun.mutate(body)}
+        onCancel={() => {
+          if (!rerun.isPending) {
+            setRerunOpen(false);
+            rerun.reset();
+          }
+        }}
+      />
 
       <ConfirmDialog
         open={confirmCancel}

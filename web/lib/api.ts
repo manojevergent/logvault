@@ -1283,6 +1283,9 @@ export type GroupSummary = {
   created_at: string;
   start_epoch: number;
   end_epoch: number;
+  chunk_hours: number;
+  id_batch_size: number;
+  output_format: string;
   is_preview: boolean;
   parent_group_id: number | null;
   total_jobs: number;
@@ -1315,3 +1318,17 @@ export const cancelGroup = (id: number) =>
   req<GroupDetail>(`/groups/${id}/cancel`, { method: "POST" });
 export const retryGroup = (id: number) =>
   req<GroupDetail>(`/groups/${id}/retry`, { method: "POST" });
+
+export type GroupRerunInput = {
+  name?: string;
+  start_epoch?: number;
+  end_epoch?: number;
+  chunk_hours?: number;
+  id_batch_size?: number;
+  output_format?: "csv" | "jsonl";
+  is_preview?: boolean;
+  job_ids?: number[];
+};
+
+export const rerunGroup = (id: number, body: GroupRerunInput = {}) =>
+  req<GroupDetail>(`/groups/${id}/rerun`, { method: "POST", body: JSON.stringify(body) });

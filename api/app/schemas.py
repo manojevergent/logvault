@@ -515,6 +515,26 @@ class GroupCreate(BatchCreate):
     name: str = ""
 
 
+class GroupRerun(BaseModel):
+    """Re-run a group's searches under edited settings.
+
+    Every field is optional: an omitted one inherits the source group, so the
+    UI can send only what the operator changed. The searches themselves keep
+    the filter snapshot recorded in the original jobs — editing the filter is a
+    Saved search change, not a re-run of this run.
+    """
+
+    name: str | None = None
+    start_epoch: int | None = None
+    end_epoch: int | None = None
+    chunk_hours: int | None = None
+    id_batch_size: int | None = None
+    output_format: Literal["csv", "jsonl"] | None = None
+    is_preview: bool | None = None
+    # Subset of this group's jobs. Omitted = every search in the group.
+    job_ids: list[int] | None = None
+
+
 class GroupSummary(BaseModel):
     id: int
     name: str
@@ -523,6 +543,11 @@ class GroupSummary(BaseModel):
     created_at: datetime
     start_epoch: int
     end_epoch: int
+    # Run settings the group was launched with. Exposed so a re-run can be
+    # seeded from them rather than guessing from the first job.
+    chunk_hours: int
+    id_batch_size: int
+    output_format: str
     is_preview: bool
     parent_group_id: int | None = None
     total_jobs: int
