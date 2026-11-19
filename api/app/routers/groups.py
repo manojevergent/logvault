@@ -19,6 +19,7 @@ from app.deps import get_current_user
 from app.models import ExtractionGroup, IndexTarget, Job, Last9Credential, User
 from app.routers.jobs import (
     MAX_BATCH_ITEMS,
+    _DOWNLOADABLE,
     _new_job_row,
     _resolve_batch_plans,
     _to_out,
@@ -93,7 +94,17 @@ def _detail(db: Session, group: ExtractionGroup) -> GroupDetail:
         )
     return GroupDetail(
         **_summary(group, jobs).model_dump(),
-        jobs=[_to_out(job, credential_label=labels.get(job.credential_id)) for job in jobs],
+        # Only a job that has reached a downloadable state can have an output
+        # file on disk. Queued/running jobs used to stat five paths each on every
+        # 4-second poll, against the volume that also hosts pgdata.
+        jobs=[
+            _to_out(
+                job,
+                credential_label=labels.get(job.credential_id),
+                check_files=job.status in _DOWNLOADABLE,
+            )
+            for job in jobs
+        ],
     )
 
 
@@ -110,20 +121,38 @@ def _resolve_sources(db: Session, jobs: list[Job]) -> list[tuple[Job, int]]:
     Re-running a historical job is only safe while its source is still there;
     the alternative is a queued job that fails a minute later with an opaque
     reference error.
+
+    Looked up in two queries rather than one or two per job: a ten-search group
+    used to cost ~20 round trips before anything was queued.
     """
+    index_ids = {job.index_target_id for job in jobs if job.index_target_id}
+    indexes = {
+        idx.id: idx
+        for idx in db.execute(
+            select(IndexTarget).where(IndexTarget.id.in_(index_ids))
+        ).scalars()
+    }
+    credential_ids = {job.credential_id for job in jobs if job.credential_id}
+    credential_ids |= {idx.credential_id for idx in indexes.values() if idx.credential_id}
+    credentials = set(
+        db.execute(
+            select(Last9Credential.id).where(Last9Credential.id.in_(credential_ids))
+        ).scalars()
+    )
+
     plans: list[tuple[Job, int]] = []
     for job in jobs:
         label = (job.filter_spec or {}).get("label") or f"job {job.id}"
-        idx = db.get(IndexTarget, job.index_target_id)
+        idx = indexes.get(job.index_target_id)
         if idx is None:
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
                 f"index for {label} no longer exists",
             )
         credential_id = job.credential_id
-        if db.get(Last9Credential, credential_id) is None:
+        if credential_id not in credentials:
             credential_id = idx.credential_id
-        if credential_id is None or db.get(Last9Credential, credential_id) is None:
+        if credential_id is None or credential_id not in credentials:
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
                 f"credential for {label} no longer exists",
@@ -166,18 +195,18 @@ def _launch(
         )
     from app.outbox import enqueue as enqueue_dispatch
 
-    for _source, clone in pairs:
-        enqueue_dispatch(db, clone.id)
+    # Capture the ids before the commit expires the instances: dispatch only
+    # needs the id, so refreshing every clone afterwards was N wasted queries.
+    clone_ids = [clone.id for _source, clone in pairs]
+    for clone_id in clone_ids:
+        enqueue_dispatch(db, clone_id)
     db.commit()
     db.refresh(group)
-    clones = [clone for _source, clone in pairs]
-    for clone in clones:
-        db.refresh(clone)
 
     from app.tasks_client import dispatch_job
 
-    for clone in clones:
-        dispatch_job(clone.id)
+    for clone_id in clone_ids:
+        dispatch_job(clone_id)
     return _detail(db, group)
 
 

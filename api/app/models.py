@@ -14,11 +14,13 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     Float,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -164,6 +166,18 @@ class JobDispatchOutbox(Base):
 
 class JobEvent(Base):
     __tablename__ = "job_events"
+    # At most one anomaly marker per job. The worker's duplicate-delivery guard
+    # is a SELECT-then-INSERT, which two concurrent deliveries can both pass;
+    # this index turns the loser's INSERT into an IntegrityError it can drop.
+    __table_args__ = (
+        Index(
+            "uq_job_events_anomaly_marker",
+            "job_id",
+            unique=True,
+            postgresql_where=text("message LIKE 'Anomaly detected%'"),
+            sqlite_where=text("message LIKE 'Anomaly detected%'"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     job_id: Mapped[int] = mapped_column(Integer, index=True)

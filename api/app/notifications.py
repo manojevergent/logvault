@@ -159,8 +159,27 @@ def save_config(db, cfg: dict, updated_by: str | None = None) -> None:
         row.updated_by = updated_by
 
 
+def _post_slack(webhook: str, payload: dict) -> None:
+    """Post to a Slack webhook and fail loudly when Slack rejects it.
+
+    A revoked webhook answers 404 ``no_service`` and a malformed payload
+    answers 400, both as ordinary responses. Without raise_for_status() every
+    one of those looked like a delivered message, so a dead webhook reported
+    "sent" for as long as nobody read the Slack channel. Raising here puts the
+    rejection into _retry and into the per-channel result the caller reports.
+    """
+    response = httpx.post(webhook, json=payload, timeout=10)
+    response.raise_for_status()
+
+
 def _retry(func, max_retries: int = None, delay: int = None):
-    """Retry a function with exponential backoff."""
+    """Retry a function with linear backoff.
+
+    ``max_retries`` is the total number of attempts, not the number of retries
+    after the first. Each wait is ``delay * attempt`` — 5s, 10s, 15s — so this is
+    linear, not exponential. With the defaults a failed alert can hold a worker
+    slot for about two minutes.
+    """
     if max_retries is None:
         max_retries = settings.notification_max_retries
     if delay is None:
@@ -180,7 +199,7 @@ def _retry(func, max_retries: int = None, delay: int = None):
                     delay=delay,
                     error=str(exc),
                 )
-                time.sleep(delay * attempt)  # exponential: 5s, 10s, 15s
+                time.sleep(delay * attempt)  # linear: 5s, 10s, 15s
     raise last_exc
 
 
@@ -283,7 +302,7 @@ def _send_slack(
         ],
     }
 
-    httpx.post(cfg["slack_webhook_url"], json=payload, timeout=10)
+    _post_slack(cfg["slack_webhook_url"], payload)
     log.info("slack.sent", schedule=schedule_name, job_id=job_id)
 
 
@@ -402,5 +421,5 @@ def _send_slack_text(webhook: str, subject: str, body: str) -> None:
             }
         ],
     }
-    httpx.post(webhook, json=payload, timeout=10)
+    _post_slack(webhook, payload)
     log.info("slack.health_sent", subject=subject)
