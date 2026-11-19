@@ -36,6 +36,8 @@ export function RerunGroupDialog({
 }) {
   const id = React.useId();
   const nameRef = React.useRef<HTMLInputElement>(null);
+  const onCancelRef = React.useRef(onCancel);
+  const seededFor = React.useRef<number | null>(null);
 
   const [name, setName] = React.useState("");
   const [start, setStart] = React.useState("");
@@ -46,10 +48,20 @@ export function RerunGroupDialog({
   const [preview, setPreview] = React.useState(false);
   const [selected, setSelected] = React.useState<Set<number>>(new Set());
 
-  // Re-seed from the group each time the dialog opens, so a cancelled edit
-  // never leaks into the next one.
   React.useEffect(() => {
-    if (!open) return;
+    onCancelRef.current = onCancel;
+  }, [onCancel]);
+
+  // Seed once per opening. The detail page refetches every few seconds, so a
+  // dependency on the live group object would wipe whatever the operator has
+  // typed in the meantime.
+  React.useEffect(() => {
+    if (!open) {
+      seededFor.current = null;
+      return;
+    }
+    if (seededFor.current === group.id) return;
+    seededFor.current = group.id;
     setName(`${group.name} (re-run)`.slice(0, 160));
     setStart(epochToLocal(group.start_epoch, "UTC" as Tz));
     setEnd(epochToLocal(group.end_epoch, "UTC" as Tz));
@@ -64,12 +76,16 @@ export function RerunGroupDialog({
     if (!open) return;
     nameRef.current?.focus();
     nameRef.current?.select();
+  }, [open]);
+
+  React.useEffect(() => {
+    if (!open) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !pending) onCancel();
+      if (event.key === "Escape" && !pending) onCancelRef.current();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, pending, onCancel]);
+  }, [open, pending]);
 
   if (!open) return null;
 
