@@ -231,6 +231,14 @@ def test_disk_path_setting_is_used_only_when_it_exists(tmp_path, monkeypatch):
     assert monitor._resolve_disk_path({}) == str(fallback)
 
 
+def test_exports_usage_counts_files_and_bytes(tmp_path):
+    (tmp_path / "exports").mkdir()
+    (tmp_path / "exports" / "a.csv").write_bytes(b"12345")
+    (tmp_path / "exports" / "b.csv").write_bytes(b"123")
+    assert monitor._exports_usage(str(tmp_path)) == (8, 2)
+    assert monitor._exports_usage(str(tmp_path / "missing")) == (0, 0)
+
+
 def test_sample_assembles_container_scoped_metrics(tmp_path, monkeypatch):
     monkeypatch.setattr(monitor, "get_settings", lambda: SimpleNamespace(storage_dir=str(tmp_path)))
     ticks = iter([0.0, 1.0])
@@ -251,6 +259,7 @@ def test_sample_assembles_container_scoped_metrics(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(monitor.psutil, "cpu_percent", lambda interval=None: 7.6)
     monkeypatch.setattr(monitor.psutil, "virtual_memory", lambda: _HostMemory())
+    (tmp_path / "export.csv").write_bytes(b"hello")
 
     got = monitor.sample()
 
@@ -259,6 +268,8 @@ def test_sample_assembles_container_scoped_metrics(tmp_path, monkeypatch):
     assert got["memory_pct"] == 2.0
     assert got["memory_total_mb"] == 512
     assert got["disk_path"] == str(tmp_path)
+    assert got["exports_size_bytes"] == 5
+    assert got["exports_files"] == 1
 
 
 _IMAGE = os.environ.get("LOGVAULT_WORKER_IMAGE", "last9_web_app-worker:prod")

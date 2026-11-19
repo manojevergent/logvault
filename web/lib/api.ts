@@ -659,6 +659,9 @@ export type HealthSample = {
   disk_free_gb?: number;
   disk_total_gb?: number;
   disk_path?: string;
+  /** Total size and count of files in the export volume. */
+  exports_size_bytes?: number;
+  exports_files?: number;
   load1?: number | null;
   /** Active alert thresholds, so any signed-in user can colour the widget. */
   thresholds?: { cpu: number; memory: number; disk: number };

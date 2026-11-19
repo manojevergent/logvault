@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Activity, Cpu, HardDrive, MemoryStick } from "lucide-react";
+import { Activity, Archive, Cpu, HardDrive, MemoryStick } from "lucide-react";
 import * as React from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { IconBadge } from "@/components/ui/icon-badge";
@@ -44,6 +44,19 @@ const TEXT: Record<Tone, string> = {
   near: "text-warning",
   breach: "text-danger font-semibold",
 };
+
+function formatBytes(bytes: number | undefined): string {
+  if (bytes == null) return "—";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  const rounded = value >= 10 || unit === 0 ? Math.round(value) : value.toFixed(1);
+  return `${rounded} ${units[unit]}`;
+}
 
 function MiniMeter({
   label,
@@ -101,6 +114,32 @@ function MiniMeter({
   );
 }
 
+/** A meter without a percentage: the export volume's size and file count. */
+function MiniStat({
+  label,
+  icon,
+  value,
+  detail,
+}: {
+  label: string;
+  icon: React.ReactNode;
+  value: string;
+  detail: string;
+}) {
+  return (
+    <div className="flex min-w-0 flex-col gap-1" title={`${label}: ${value} (${detail})`}>
+      <div className="flex items-baseline justify-between gap-2 text-[11px] leading-none">
+        <span className="flex min-w-0 items-center gap-1 font-medium">
+          {icon}
+          <span className="truncate">{label}</span>
+        </span>
+        <span className="shrink-0 font-mono tabular-nums text-muted-foreground">{value}</span>
+      </div>
+      <p className="mt-auto truncate text-[10px] text-muted-foreground">{detail}</p>
+    </div>
+  );
+}
+
 /**
  * Dashboard card. Same shape as the stat cards beside it - one icon badge, one
  * value line, one label - so the row reads as a single strip. Colour encodes
@@ -146,6 +185,20 @@ export function SystemHealthCard() {
           ? "System health - near limit"
           : "System health";
 
+  const exportsBytes = data?.exports_size_bytes;
+  const exportsFiles = data?.exports_files;
+  const exportsLabel =
+    exportsBytes != null
+      ? `${formatBytes(exportsBytes)}${
+          exportsFiles != null ? ` · ${exportsFiles.toLocaleString()} files` : ""
+        }`
+      : null;
+  const detail = exportsLabel ? `${exportsLabel} · ${label}` : label;
+  const title =
+    exportsBytes != null
+      ? `${formatBytes(exportsBytes)} in ${exportsFiles?.toLocaleString() ?? "?"} files`
+      : undefined;
+
   return (
     <Card>
       <CardContent className="flex items-center gap-3 p-3.5">
@@ -164,7 +217,9 @@ export function SystemHealthCard() {
               </React.Fragment>
             ))}
           </div>
-          <p className="truncate text-[11px] text-muted-foreground">{label}</p>
+          <p className="truncate text-[11px] text-muted-foreground" title={title}>
+            {detail}
+          </p>
         </div>
       </CardContent>
     </Card>
@@ -179,7 +234,7 @@ export function HealthMeters({
 }) {
   const thresholds = metrics?.thresholds ?? { cpu: 85, memory: 85, disk: 85 };
   return (
-    <div className="grid gap-3 sm:grid-cols-3">
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       <MiniMeter
         label="CPU"
         icon={<Cpu className="h-3 w-3" />}
@@ -213,6 +268,16 @@ export function HealthMeters({
             : "—"
         }
         compact={false}
+      />
+      <MiniStat
+        label="Exports"
+        icon={<Archive className="h-3 w-3" />}
+        value={formatBytes(metrics?.exports_size_bytes)}
+        detail={
+          metrics?.exports_files != null
+            ? `${metrics.exports_files.toLocaleString()} files`
+            : "—"
+        }
       />
     </div>
   );

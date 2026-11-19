@@ -193,6 +193,24 @@ def _resolve_disk_path(cfg: dict[str, Any] | None) -> str:
     return get_settings().storage_dir
 
 
+def _exports_usage(root: str) -> tuple[int, int]:
+    """Bytes and file count under the export volume.
+
+    Walks the tree so retries and distinct-value stores are included; the disk
+    metric already covers the volume, this is the extraction share of it.
+    """
+    total = 0
+    files = 0
+    for dirpath, _dirnames, filenames in os.walk(root, onerror=lambda _error: None):
+        for name in filenames:
+            try:
+                total += os.path.getsize(os.path.join(dirpath, name))
+                files += 1
+            except OSError:
+                continue
+    return total, files
+
+
 def sample(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
     """Current metrics. ``cpu`` is a 1-second sample, not a since-boot mean.
 
@@ -210,6 +228,7 @@ def sample(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
     usage_after = _cgroup_cpu_usage_usec()
 
     memory = _memory_sample(psutil.virtual_memory(), _cgroup_memory())
+    exports_bytes, exports_files = _exports_usage(get_settings().storage_dir)
     return {
         "ts": datetime.now(UTC).isoformat(),
         "cpu_pct": _cpu_sample(host_cpu, _cgroup_cpu_quota(), usage_before, usage_after, elapsed),
@@ -218,6 +237,8 @@ def sample(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
         "disk_free_gb": round(usage.free / 1024**3, 1),
         "disk_total_gb": round(usage.total / 1024**3, 1),
         "disk_path": disk_path,
+        "exports_size_bytes": exports_bytes,
+        "exports_files": exports_files,
         "load1": round(os.getloadavg()[0], 2) if hasattr(os, "getloadavg") else None,
     }
 
