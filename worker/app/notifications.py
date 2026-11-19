@@ -137,8 +137,27 @@ def load_config() -> dict:
     return cfg
 
 
+def _post_slack(webhook: str, payload: dict) -> None:
+    """Post to a Slack webhook and fail loudly when Slack rejects it.
+
+    A revoked webhook answers 404 ``no_service`` and a malformed payload
+    answers 400, both as ordinary responses. Without raise_for_status() every
+    one of those looked like a delivered message, so a dead webhook reported
+    "sent" for as long as nobody read the Slack channel. Raising here puts the
+    rejection into _retry and into the per-channel result the caller reports.
+    """
+    response = httpx.post(webhook, json=payload, timeout=10)
+    response.raise_for_status()
+
+
 def _retry(func, max_retries: int | None = None, delay: int | None = None):
-    """Retry a function with linear backoff."""
+    """Retry a function with linear backoff.
+
+    ``max_retries`` is the total number of attempts, not the number of retries
+    after the first. Each wait is ``delay * attempt``, so 5s, 10s, 15s — linear,
+    not exponential. With the defaults a failed alert can hold a worker slot for
+    about two minutes, which is why the send happens outside the transaction.
+    """
     if max_retries is None:
         max_retries = settings.notification_max_retries
     if delay is None:
@@ -157,7 +176,7 @@ def _retry(func, max_retries: int | None = None, delay: int | None = None):
                     f"[notification.retry] attempt={attempt}, max={max_retries}, error={exc}",
                     file=sys.stderr,
                 )
-                time.sleep(delay * attempt)  # exponential: 5s, 10s, 15s
+                time.sleep(delay * attempt)  # linear: 5s, 10s, 15s
     raise last_exc
 
 
@@ -254,7 +273,7 @@ def _send_slack(
         ],
     }
 
-    httpx.post(cfg["slack_webhook_url"], json=payload, timeout=10)
+    _post_slack(cfg["slack_webhook_url"], payload)
     print(f"[slack.sent] schedule={schedule_name}, job={job_id}")
 
 
@@ -273,12 +292,18 @@ def send_anomaly_alert(
     unmatched_pct: float | None,
     row_drop_threshold_pct: int,
     unmatched_threshold: int,
-) -> None:
+) -> dict[str, dict[str, object]]:
     """Send an anomaly alert for a completed scheduled run.
 
     Email goes to the schedule's recipients; Slack uses the global webhook, so
     a team can receive anomalies there even when no per-schedule email address
     has been configured.
+
+    Returns one entry per channel with what actually happened, exactly like
+    ``send_health_alert``. The caller records the "Anomaly detected" marker
+    before this runs, so a silent channel failure would otherwise leave a job
+    that looks alerted while nobody was told. Returning the outcome is what
+    lets the caller write that failure down.
     """
     cfg = load_config()
     who = f"[{customer}] " if customer else ""
@@ -291,7 +316,10 @@ def send_anomaly_alert(
         f"Previous run: {previous_rows:,}" if previous_rows is not None else "Previous run: n/a",
     ]
     if drop_pct is not None:
-        details.append(f"Row change: {drop_pct:+.1f}%")
+        # drop_pct is "percent lost", so a positive number means a smaller run.
+        # Printing it signed read as growth in the alert body.
+        direction = "drop" if drop_pct > 0 else "growth" if drop_pct < 0 else "flat"
+        details.append(f"Row change: {abs(drop_pct):.1f}% {direction}")
         details.append(f"Row-drop threshold: {row_drop_threshold_pct}%")
     if parsed_rows:
         details.append(f"Unmatched rows: {rows_unmatched:,} of {parsed_rows:,} parsed")
@@ -305,17 +333,34 @@ def send_anomaly_alert(
         + "\n\nCheck the job details at the LogVault dashboard."
     )
 
-    if recipients and cfg["smtp_host"] and cfg["smtp_user"]:
+    result: dict[str, dict[str, object]] = {}
+    if not recipients:
+        result["email"] = {"attempted": False, "ok": False, "reason": "no recipients"}
+    elif not (cfg["smtp_host"] and cfg["smtp_user"]):
+        result["email"] = {
+            "attempted": False,
+            "ok": False,
+            "reason": "SMTP host/user not configured",
+        }
+    else:
         try:
             _retry(lambda: _send_plain_email(cfg, recipients, subject, body))
-        except Exception as exc:
+            result["email"] = {"attempted": True, "ok": True, "reason": "sent"}
+        except Exception as exc:  # noqa: BLE001 - reported, not raised
             print(f"[email.final_error] {exc}", file=sys.stderr)
+            result["email"] = {"attempted": True, "ok": False, "reason": str(exc)[:300]}
 
-    if cfg["slack_webhook_url"]:
+    if not cfg["slack_webhook_url"]:
+        result["slack"] = {"attempted": False, "ok": False, "reason": "no Slack webhook configured"}
+    else:
         try:
             _retry(lambda: _send_slack_text(cfg["slack_webhook_url"], subject, body))
-        except Exception as exc:
+            result["slack"] = {"attempted": True, "ok": True, "reason": "sent"}
+        except Exception as exc:  # noqa: BLE001 - reported, not raised
             print(f"[slack.final_error] {exc}", file=sys.stderr)
+            result["slack"] = {"attempted": True, "ok": False, "reason": str(exc)[:300]}
+
+    return result
 
 
 def send_health_alert(
@@ -431,5 +476,5 @@ def _send_slack_text(webhook: str, subject: str, body: str) -> None:
             }
         ],
     }
-    httpx.post(webhook, json=payload, timeout=10)
+    _post_slack(webhook, payload)
     print(f"[slack.health_sent] subject={subject}")

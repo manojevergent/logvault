@@ -36,6 +36,30 @@ def _backoff(attempts: int) -> timedelta:
     return timedelta(seconds=max(1.0, raw + jitter))
 
 
+def enqueue(conn, job_id: int, task_name: str = "logvault.run_job") -> None:
+    """Write dispatch intent for a job inside the caller's transaction.
+
+    The API has its own copy (``api/app/outbox.py``); the worker needs one too,
+    because ``scan_schedules`` creates jobs without going through the API. A
+    scheduled job used to be nothing but a Celery ``delay()``, so a broker hiccup
+    left the row ``queued`` with no redelivery owed and the window silently
+    skipped. Committing the intent with the job makes the obligation durable.
+    """
+    o = db.job_dispatch_outbox
+    now = datetime.now(UTC)
+    conn.execute(
+        o.insert().values(
+            job_id=job_id,
+            task_name=task_name,
+            payload={},
+            status="pending",
+            attempts=0,
+            next_attempt_at=now,
+            created_at=now,
+        )
+    )
+
+
 def claim_due(conn, owner: str, batch: int = 100, lock_seconds: int = 60) -> list[dict]:
     """Reserve up to ``batch`` due rows. Postgres only; SKIP LOCKED is the point."""
     o = db.job_dispatch_outbox
@@ -89,23 +113,36 @@ def mark_published(conn, row_id: int, owner: str) -> bool:
     return result.rowcount == 1
 
 
-def mark_failed(conn, row_id: int, owner: str, error: str) -> None:
+def mark_failed(conn, row_id: int, owner: str, error: str) -> bool:
+    """Record a publish failure. False means the row was no longer ours.
+
+    The UPDATE is the authority: it only touches a row this dispatcher still
+    holds and that is still pending. Without those two conditions a row another
+    dispatcher already published could be pushed back to ``pending`` and sent
+    twice. ``attempts`` is incremented in the database so two failing dispatchers
+    cannot both read the same value and write the same total.
+    """
     o = db.job_dispatch_outbox
+    # The backoff interval is computed from the previous count; only the rare
+    # case of two dispatchers failing the same row can make it one step short,
+    # which delays the next try by less than intended rather than losing one.
     attempts = conn.execute(select(o.c.attempts).where(o.c.id == row_id)).scalar_one()
-    nxt = attempts + 1
-    status = "dead" if nxt >= MAX_ATTEMPTS else "pending"
-    conn.execute(
+    result = conn.execute(
         update(o)
-        .where(o.c.id == row_id, o.c.locked_by == owner)
+        .where(o.c.id == row_id, o.c.locked_by == owner, o.c.status == "pending")
         .values(
-            attempts=nxt,
-            status=status,
+            attempts=o.c.attempts + 1,
+            status=sa.case(
+                (o.c.attempts + 1 >= MAX_ATTEMPTS, "dead"),
+                else_="pending",
+            ),
             last_error=error[:2000],
-            next_attempt_at=datetime.now(UTC) + _backoff(nxt),
+            next_attempt_at=datetime.now(UTC) + _backoff(attempts + 1),
             locked_by=None,
             locked_until=None,
         )
     )
+    return result.rowcount == 1
 
 
 def dispatch_once(engine, publisher, batch: int = 100) -> dict:
@@ -113,7 +150,7 @@ def dispatch_once(engine, publisher, batch: int = 100) -> dict:
     owner = _owner_id()
     # `lost_update` is a row the broker accepted but the database refused to
     # confirm. It must never be reported as published.
-    stats = {"claimed": 0, "published": 0, "failed": 0, "lost_update": 0}
+    stats = {"claimed": 0, "published": 0, "failed": 0, "lost_update": 0, "not_owned": 0}
     with engine.begin() as conn:
         rows = claim_due(conn, owner, batch=batch)
     stats["claimed"] = len(rows)
@@ -122,8 +159,12 @@ def dispatch_once(engine, publisher, batch: int = 100) -> dict:
             publisher(row["task_name"], row["job_id"])
         except Exception as exc:  # noqa: BLE001 - a publish failure must not stop the batch
             with engine.begin() as conn:
-                mark_failed(conn, row["id"], owner, f"{type(exc).__name__}: {exc}")
+                owned = mark_failed(conn, row["id"], owner, f"{type(exc).__name__}: {exc}")
             stats["failed"] += 1
+            if not owned:
+                # The row was published or re-claimed by another dispatcher while
+                # this attempt was failing. The obligation is no longer ours.
+                stats["not_owned"] += 1
         else:
             with engine.begin() as conn:
                 confirmed = mark_published(conn, row["id"], owner)

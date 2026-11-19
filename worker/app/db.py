@@ -18,6 +18,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     Engine,
+    Index,
     Integer,
     MetaData,
     String,
@@ -143,6 +144,17 @@ job_events = Table(
     Column("level", String(10)),
     Column("message", Text),
     Column("rows_delta", Integer),
+    # Mirrors Alembic 0036: at most one anomaly marker per job. The worker's
+    # duplicate-delivery guard is a SELECT-then-INSERT that two concurrent
+    # deliveries can both pass; this index turns the loser's INSERT into an
+    # IntegrityError the hook drops instead of sending twice.
+    Index(
+        "uq_job_events_anomaly_marker",
+        "job_id",
+        unique=True,
+        postgresql_where=text("message LIKE 'Anomaly detected%'"),
+        sqlite_where=text("message LIKE 'Anomaly detected%'"),
+    ),
 )
 
 last9_credentials = Table(

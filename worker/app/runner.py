@@ -18,7 +18,6 @@ import zipfile
 from datetime import UTC, datetime, timedelta
 
 import httpx
-from sqlalchemy import text
 
 from app import artifacts, crypto, db, fenced
 from app.heartbeat import LeaseKeeper
@@ -44,8 +43,8 @@ from app.last9 import (
     store_path,
 )
 from app.last9.checkpoint import validate as validate_checkpoint
-from app.notifications import send_failure_alert
 from app.s3 import upload_job_artifacts
+from app.tasks import _send_alert_if_scheduled
 
 
 class _Stopped(Exception):
@@ -61,34 +60,6 @@ STATUS_CHECK_SECONDS = 10.0
 
 def _now() -> datetime:
     return datetime.now(UTC)
-
-
-def _send_alert_if_scheduled(conn, job: dict, error_message: str) -> None:
-    """Send alert if this job is from a schedule."""
-    created_by = job.get("created_by") or ""
-    if not created_by.startswith("schedule:"):
-        return
-
-    try:
-        schedule_id = int(created_by.split(":")[1])
-        result = (
-            conn.execute(
-                text("SELECT id, name, alert_recipients FROM schedules WHERE id = :id"),
-                {"id": schedule_id},
-            )
-            .mappings()
-            .first()
-        )
-        if result and result["alert_recipients"]:
-            send_failure_alert(
-                result["alert_recipients"],
-                result["name"],
-                job["id"],
-                error_message,
-            )
-    except Exception:
-        # suppress: alerting failure shouldn't affect job failure handling
-        pass
 
 
 # A customer name is free text that becomes a directory, so it has to be reduced
@@ -293,7 +264,7 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
                 conn,
                 job_id,
                 f"Checkpoint not trusted ({cp_reason}); restarting from chunk 0",
-                level="warning",
+                level="warn",
             )
     file_offset = checkpoint_json.get("file_offset", 0)
     # Restore effective chunk_hours from the last checkpoint so adaptive sizing
@@ -992,7 +963,7 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
             conn,
             job_id,
             msg if published else "Publication refused: lease superseded",
-            level="info" if published else "warning",
+            level="info" if published else "warn",
         )
         if s3_error:
             _send_alert_if_scheduled(conn, job, f"S3 upload failed: {s3_error}")

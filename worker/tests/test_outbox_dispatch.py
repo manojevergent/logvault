@@ -101,3 +101,39 @@ def test_publish_failure_increments_attempts_and_stays_pending(worker_db):
     assert row["status"] == "pending"
     assert row["attempts"] == 1
     assert row["last_error"].startswith("RuntimeError")
+
+
+def test_mark_failed_does_not_revive_a_published_row(worker_db):
+    """A late failure must not push a published row back to pending.
+
+    The row was already delivered; putting it back would publish the same job
+    twice. The UPDATE is conditional on still being ours and still pending.
+    """
+    from app.outbox import mark_failed
+
+    with worker_db.engine().begin() as conn:
+        _outbox_row(conn)
+        _claim_all(conn, "d1")
+        conn.execute(sa.update(db.job_dispatch_outbox).values(status="published"))
+        assert mark_failed(conn, 1, "d1", "late broker timeout") is False
+
+    with worker_db.engine().begin() as conn:
+        row = conn.execute(sa.select(db.job_dispatch_outbox)).mappings().one()
+    assert row["status"] == "published"
+    assert row["attempts"] == 0
+
+
+def test_mark_failed_requires_ownership(worker_db):
+    """A dispatcher whose lock expired must not touch the row."""
+    from app.outbox import mark_failed
+
+    with worker_db.engine().begin() as conn:
+        _outbox_row(conn)
+        _claim_all(conn, "d1")
+        assert mark_failed(conn, 1, "a-different-dispatcher", "timeout") is False
+
+    with worker_db.engine().begin() as conn:
+        row = conn.execute(sa.select(db.job_dispatch_outbox)).mappings().one()
+    assert row["status"] == "pending"
+    assert row["attempts"] == 0
+    assert row["locked_by"] == "d1"

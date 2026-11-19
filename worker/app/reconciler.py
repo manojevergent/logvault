@@ -67,7 +67,7 @@ def reconcile_once(engine, limit: int = 50, max_redispatches: int = MAX_REDISPAT
                     .values(status="canceled", owner_id=None, lease_expires_at=None,
                             finished_at=sa.func.now())
                 )
-                db.add_event(conn, job_id, "Lease expired after cancel request; job canceled", "warning")
+                db.add_event(conn, job_id, "Lease expired after cancel request; job canceled", "warn")
                 stats["canceled"] += 1
                 continue
             if row["pause_requested_at"] is not None:
@@ -76,7 +76,7 @@ def reconcile_once(engine, limit: int = 50, max_redispatches: int = MAX_REDISPAT
                     .where(db.jobs.c.id == job_id, db.jobs.c.lease_token == row["lease_token"])
                     .values(status="paused", owner_id=None, lease_expires_at=None)
                 )
-                db.add_event(conn, job_id, "Lease expired after pause request; job paused", "warning")
+                db.add_event(conn, job_id, "Lease expired after pause request; job paused", "warn")
                 stats["paused"] += 1
                 continue
             if _outbox_attempts(conn, job_id) >= max_redispatches:
@@ -98,7 +98,7 @@ def reconcile_once(engine, limit: int = 50, max_redispatches: int = MAX_REDISPAT
                         lease_expires_at=None)
             )
             _reopen_outbox(conn, job_id)
-            db.add_event(conn, job_id, "Lease expired; redispatched", "warning")
+            db.add_event(conn, job_id, "Lease expired; redispatched", "warn")
             stats["redispatched"] += 1
     return stats
 

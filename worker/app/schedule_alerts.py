@@ -8,8 +8,10 @@ Kept free of Celery and the database so the thresholds can be tested directly:
 2. Unmatched rows — use the parse/aggregation snapshot's ``rows_unmatched``.
    A threshold of 100 alerts at 100 unmatched rows, not at 99.
 
-Both alerts are opt-in per schedule. A missing baseline (first run, or a
-previous run that wrote zero rows) never produces a row-drop alert.
+Both alerts are opt-in per schedule. A missing baseline (first run) never
+produces a row-drop alert. A previous run that wrote zero rows is skipped as a
+baseline and the comparison looks further back, so a zero-row run neither alerts
+nor hides the next real drop.
 """
 
 from __future__ import annotations

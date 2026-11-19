@@ -45,11 +45,77 @@ def test_scan_creates_job_for_due_schedule(worker_db, monkeypatch):
             .mappings()
             .first()
         )
+        intent = (
+            conn.execute(
+                worker_db.job_dispatch_outbox.select().where(
+                    worker_db.job_dispatch_outbox.c.job_id == created[0]
+                )
+            )
+            .mappings()
+            .first()
+        )
     assert job["status"] == "queued"
     assert job["created_by"] == "schedule:1"
     assert sched["last_run_at"] is not None
+    # The dispatch obligation is durable even when the delay() call succeeds.
+    assert intent is not None and intent["status"] == "pending"
+    assert intent["task_name"] == "logvault.run_job"
 
     # Not due again immediately.
+    assert scheduler.scan_schedules() == []
+
+
+def test_broker_failure_keeps_the_run_owed(worker_db, monkeypatch):
+    """A dead broker must not lose a scheduled window.
+
+    Before the outbox intent was written with the job, a failed ``delay()`` left
+    the row ``queued`` with nothing owing a redelivery, while ``last_run_at`` had
+    already advanced and ``_already_extracted`` blocked a re-insert. The window
+    was gone with no error anywhere. The obligation must survive the failure.
+    """
+
+    def _broker_down(jid):
+        raise ConnectionError("broker unreachable")
+
+    monkeypatch.setattr(tasks.run_job, "delay", _broker_down)
+
+    with worker_db.engine().begin() as conn:
+        conn.execute(
+            worker_db.schedules.insert().values(
+                id=1,
+                name="daily",
+                enabled=True,
+                interval_seconds=3600,
+                lookback_seconds=3600,
+                region_code="ap-southeast-1",
+                index_target_id=1,
+                credential_id=1,
+                chunk_hours=1,
+                id_batch_size=100,
+                output_format="csv",
+                filter_spec={"phrases": ["x"], "ids": []},
+                last_run_at=None,
+            )
+        )
+
+    created = scheduler.scan_schedules()
+    assert len(created) == 1
+
+    with worker_db.engine().begin() as conn:
+        intent = (
+            conn.execute(
+                worker_db.job_dispatch_outbox.select().where(
+                    worker_db.job_dispatch_outbox.c.job_id == created[0]
+                )
+            )
+            .mappings()
+            .first()
+        )
+    assert intent is not None, "the dispatch obligation must survive a broker failure"
+    assert intent["status"] == "pending"
+    assert intent["attempts"] == 0
+
+    # The window is still recorded as extracted, so the next scan must not duplicate it.
     assert scheduler.scan_schedules() == []
 
 

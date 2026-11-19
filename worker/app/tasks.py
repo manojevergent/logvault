@@ -12,6 +12,7 @@ import shutil
 from datetime import UTC, datetime
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from app.celery_app import celery
 from app.config import get_settings
@@ -170,11 +171,20 @@ def _send_schedule_anomaly_if_needed(job_id: int) -> None:
 
             agg = _as_dict(job.get("aggregation_result"))
             current_rows = int(job.get("rows_written") or 0)
+            # A partial run lost chunks, so its row count is not comparable with a
+            # complete run: alerting "rows dropped" on it would page someone about a
+            # run that failed to finish rather than about a quiet source. The job's
+            # own partial-completion event already says the extraction was short.
+            run_complete = str(job.get("completion_state") or "unknown") != "partial"
             previous_rows = conn.execute(
                 text(
                     "SELECT rows_written FROM jobs "
                     "WHERE created_by = :owner AND status = 'completed' "
                     "AND id <> :id AND start_epoch < :start AND rows_written > 0 "
+                    # A partial run under-counts, so using it as the baseline would
+                    # mask the next real drop. 'unknown' predates the column and is
+                    # treated as usable, 'partial' is not.
+                    "AND coalesce(completion_state, 'unknown') <> 'partial' "
                     "ORDER BY start_epoch DESC, id DESC LIMIT 1"
                 ),
                 {
@@ -189,7 +199,7 @@ def _send_schedule_anomaly_if_needed(job_id: int) -> None:
                 previous_rows=previous_rows,
                 rows_matched=agg.get("rows_matched"),
                 rows_unmatched=agg.get("rows_unmatched"),
-                alert_on_row_drop=bool(sched.get("alert_on_row_drop")),
+                alert_on_row_drop=bool(sched.get("alert_on_row_drop")) and run_complete,
                 row_drop_threshold_pct=int(sched.get("row_drop_threshold_pct") or 20),
                 alert_on_unmatched=bool(sched.get("alert_on_unmatched")),
                 unmatched_threshold=int(sched.get("unmatched_threshold") or 100),
@@ -197,12 +207,22 @@ def _send_schedule_anomaly_if_needed(job_id: int) -> None:
             if not evaluation.reasons:
                 return
 
-            db.add_event(
-                conn,
-                job_id,
-                "Anomaly detected: " + "; ".join(evaluation.reasons),
-                level="warn",
-            )
+            # A partial unique index allows only one anomaly marker per job. Two
+            # concurrent deliveries can both pass the SELECT above, so the
+            # insert is the real arbiter: a savepoint keeps the outer
+            # transaction usable when the other delivery won the race.
+            try:
+                with conn.begin_nested():
+                    db.add_event(
+                        conn,
+                        job_id,
+                        "Anomaly detected: " + "; ".join(evaluation.reasons),
+                        level="warn",
+                    )
+            except IntegrityError:
+                # The other delivery owns the notification. Sending here would
+                # page the team twice for one anomaly.
+                return
             spec = _as_dict(sched.get("filter_spec"))
             customer = str(spec.get("customer") or "").strip()
             if not customer:
@@ -231,13 +251,58 @@ def _send_schedule_anomaly_if_needed(job_id: int) -> None:
 
     if send_payload is not None:
         try:
-            send_anomaly_alert(**send_payload)
+            delivery = send_anomaly_alert(**send_payload)
         except Exception as exc:
             from app.logging_config import get_logger
 
             get_logger("logvault.worker.tasks").exception(
                 "schedule_anomaly.send_failed", exc_info=exc
             )
+            delivery = {"error": {"attempted": True, "ok": False, "reason": str(exc)[:300]}}
+        _record_anomaly_delivery(job_id, delivery)
+
+
+def _record_anomaly_delivery(job_id: int, delivery: object) -> None:
+    """Write down a failed or skipped anomaly delivery.
+
+    The "Anomaly detected" marker is committed before the send, so a channel
+    failure leaves a job that reads as alerted while nobody was told. This event
+    is the only place that difference becomes visible. ``None`` means the sender
+    returned nothing (an older build), so there is nothing to judge and nothing
+    is written.
+    """
+    if not isinstance(delivery, dict):
+        return
+
+    channels = {
+        name: result
+        for name, result in delivery.items()
+        if isinstance(result, dict) and result.get("attempted")
+    }
+    failed = {name: result for name, result in channels.items() if not result.get("ok")}
+    if channels and not failed:
+        return
+
+    if failed:
+        message = "Anomaly alert not delivered: " + "; ".join(
+            f"{name}: {result.get('reason') or 'unknown error'}" for name, result in failed.items()
+        )
+    else:
+        message = (
+            "Anomaly alert not delivered: no channel configured (no recipients, no Slack webhook)"
+        )
+
+    from app import db
+
+    try:
+        with db.engine().begin() as conn:
+            db.add_event(conn, job_id, message, level="warn")
+    except Exception as exc:  # noqa: BLE001 - the alert path must not fail the job
+        from app.logging_config import get_logger
+
+        get_logger("logvault.worker.tasks").exception(
+            "schedule_anomaly.delivery_event_failed", exc_info=exc
+        )
 
 
 def _mark_failed(db, job_id: int, exc: BaseException) -> None:
