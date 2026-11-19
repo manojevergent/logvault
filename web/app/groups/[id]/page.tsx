@@ -22,7 +22,7 @@ import {
   rerunGroup,
   retryGroup,
 } from "@/lib/api";
-import { formatEpoch } from "@/lib/time";
+import { Tz, formatEpoch, useTz } from "@/lib/time";
 
 const GROUP_STATUS: Record<
   GroupStatus,
@@ -51,17 +51,17 @@ const JOB_STATUS: Record<
 const num = (value: number) => value.toLocaleString("en-US");
 const active = (group: GroupDetail) => group.status === "queued" || group.status === "running";
 
-function fmtWhen(value: string | null | undefined): string {
+function fmtWhen(value: string | null | undefined, tz: Tz = "UTC"): string {
   if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "—";
   return `${date.toLocaleString("en-GB", {
-    timeZone: "UTC",
+    timeZone: tz === "IST" ? "Asia/Kolkata" : "UTC",
     day: "2-digit",
     month: "short",
     hour: "2-digit",
     minute: "2-digit",
-  })} UTC`;
+  })} ${tz}`;
 }
 
 function JobRow({ job, source }: { job: Job; source: string }) {
@@ -112,13 +112,20 @@ export default function GroupDetailPage() {
   const id = Number(useParams().id);
   const router = useRouter();
   const qc = useQueryClient();
+  const [tz, setTz] = useTz();
   const [confirmCancel, setConfirmCancel] = React.useState(false);
   const [rerunOpen, setRerunOpen] = React.useState(false);
 
   const group = useQuery({
     queryKey: ["group", id],
     queryFn: () => getGroup(id),
-    refetchInterval: 4_000,
+    // Poll only while the group is still moving. A finished group's page used to
+    // poll forever, and each poll stats every job's output file on the volume
+    // that also hosts pgdata.
+    refetchInterval: (query) => {
+      const data = query.state.data as GroupDetail | undefined;
+      return data && active(data) ? 4_000 : false;
+    },
     enabled: Number.isFinite(id),
   });
   const indexes = useQuery({ queryKey: ["indexes", ""], queryFn: () => listIndexes() });
@@ -217,8 +224,15 @@ export default function GroupDetailPage() {
           </div>
           <p className="mt-0.5 text-xs text-muted-foreground">
             {data.total_jobs} search{data.total_jobs === 1 ? "" : "es"} ·{" "}
-            {formatEpoch(data.start_epoch)} → {formatEpoch(data.end_epoch)} UTC
-            {data.created_by ? ` · ${data.created_by}` : ""} · {fmtWhen(data.created_at)}
+            <button
+              type="button"
+              onClick={() => setTz(tz === "IST" ? "UTC" : "IST")}
+              className="uppercase tracking-wide underline decoration-dotted underline-offset-2 hover:text-foreground"
+              title={`Showing ${tz} — click to switch`}
+            >
+              {formatEpoch(data.start_epoch, tz)} → {formatEpoch(data.end_epoch, tz)} ({tz})
+            </button>
+            {data.created_by ? ` · ${data.created_by}` : ""} · {fmtWhen(data.created_at, tz)}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -354,6 +368,7 @@ export default function GroupDetailPage() {
       <RerunGroupDialog
         open={rerunOpen}
         group={data}
+        tz={tz}
         pending={rerun.isPending}
         error={rerun.isError ? (rerun.error as Error).message : null}
         onSubmit={(body) => rerun.mutate(body)}

@@ -22,6 +22,7 @@ const field = "space-y-1";
 export function RerunGroupDialog({
   open,
   group,
+  tz,
   pending,
   error,
   onSubmit,
@@ -29,6 +30,7 @@ export function RerunGroupDialog({
 }: {
   open: boolean;
   group: GroupDetail;
+  tz: Tz;
   pending: boolean;
   error: string | null;
   onSubmit: (body: GroupRerunInput) => void;
@@ -47,6 +49,10 @@ export function RerunGroupDialog({
   const [format, setFormat] = React.useState<"csv" | "jsonl">("csv");
   const [preview, setPreview] = React.useState(false);
   const [selected, setSelected] = React.useState<Set<number>>(new Set());
+  // The zone the inputs were seeded in. Kept separately from the live `tz` so a
+  // timezone switch elsewhere on the page cannot reinterpret the wall-clock
+  // values already in the form as a different instant.
+  const [seedTz, setSeedTz] = React.useState<Tz>("UTC");
 
   React.useEffect(() => {
     onCancelRef.current = onCancel;
@@ -54,7 +60,7 @@ export function RerunGroupDialog({
 
   // Seed once per opening. The detail page refetches every few seconds, so a
   // dependency on the live group object would wipe whatever the operator has
-  // typed in the meantime.
+  // typed in the meantime. `tz` only affects the seed, so it is safe to list.
   React.useEffect(() => {
     if (!open) {
       seededFor.current = null;
@@ -62,15 +68,16 @@ export function RerunGroupDialog({
     }
     if (seededFor.current === group.id) return;
     seededFor.current = group.id;
+    setSeedTz(tz);
     setName(`${group.name} (re-run)`.slice(0, 160));
-    setStart(epochToLocal(group.start_epoch, "UTC" as Tz));
-    setEnd(epochToLocal(group.end_epoch, "UTC" as Tz));
+    setStart(epochToLocal(group.start_epoch, tz));
+    setEnd(epochToLocal(group.end_epoch, tz));
     setChunkHours(group.chunk_hours);
     setBatchSize(group.id_batch_size);
     setFormat(group.output_format === "jsonl" ? "jsonl" : "csv");
     setPreview(group.is_preview);
     setSelected(new Set(group.jobs.map((job) => job.id)));
-  }, [open, group]);
+  }, [open, group, tz]);
 
   React.useEffect(() => {
     if (!open) return;
@@ -89,8 +96,8 @@ export function RerunGroupDialog({
 
   if (!open) return null;
 
-  const startEpoch = localToEpoch(start, "UTC" as Tz);
-  const endEpoch = localToEpoch(end, "UTC" as Tz);
+  const startEpoch = localToEpoch(start, seedTz);
+  const endEpoch = localToEpoch(end, seedTz);
   const validWindow =
     Number.isFinite(startEpoch) && Number.isFinite(endEpoch) && endEpoch > startEpoch;
   const validChunk = Number.isFinite(chunkHours) && chunkHours >= 1;
@@ -159,7 +166,7 @@ export function RerunGroupDialog({
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className={field}>
-              <Label htmlFor={`${id}-start`}>Start (UTC)</Label>
+              <Label htmlFor={`${id}-start`}>Start ({seedTz})</Label>
               <Input
                 id={`${id}-start`}
                 type="datetime-local"
@@ -168,7 +175,7 @@ export function RerunGroupDialog({
               />
             </div>
             <div className={field}>
-              <Label htmlFor={`${id}-end`}>End (UTC)</Label>
+              <Label htmlFor={`${id}-end`}>End ({seedTz})</Label>
               <Input
                 id={`${id}-end`}
                 type="datetime-local"
@@ -181,7 +188,7 @@ export function RerunGroupDialog({
             className={`font-mono text-[11px] ${validWindow ? "text-muted-foreground" : "text-danger"}`}
           >
             {validWindow
-              ? `${formatEpoch(startEpoch)} → ${formatEpoch(endEpoch)} UTC`
+              ? `${formatEpoch(startEpoch, seedTz)} → ${formatEpoch(endEpoch, seedTz)} ${seedTz}`
               : "End must be after start."}
           </p>
 
