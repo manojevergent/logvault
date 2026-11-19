@@ -636,6 +636,8 @@ export type HealthAlertConfig = {
   cpu_threshold_pct: number;
   memory_threshold_pct: number;
   disk_threshold_pct: number;
+  /** Blank = the export volume. The worker falls back to it if this path is absent. */
+  disk_path: string;
   cooldown_minutes: number;
   slack: boolean;
   email: boolean;
@@ -643,7 +645,7 @@ export type HealthAlertConfig = {
   notify_on_recovery: boolean;
 };
 
-export type HealthAlertConfigOut = HealthAlertConfig & { disk_path: string | null };
+export type HealthAlertConfigOut = HealthAlertConfig;
 
 export type HealthSample = {
   available: boolean;

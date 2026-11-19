@@ -126,6 +126,8 @@ HEALTH_ALERT_DEFAULTS: dict[str, object] = {
     "cpu_threshold_pct": 85,
     "memory_threshold_pct": 85,
     "disk_threshold_pct": 85,
+    # Blank = the export volume, which is the one whose exhaustion breaks Postgres.
+    "disk_path": "",
     "cooldown_minutes": 30,
     "slack": True,
     "email": False,
@@ -139,6 +141,9 @@ class HealthAlertConfig(BaseModel):
     cpu_threshold_pct: float = 85
     memory_threshold_pct: float = 85
     disk_threshold_pct: float = 85
+    # Blank = the export volume. The worker falls back to it when this path does
+    # not exist, so a typo cannot point the alert at an empty directory.
+    disk_path: str = ""
     cooldown_minutes: int = 30
     slack: bool = True
     # Off until a recipient is configured - an on-but-empty channel would
@@ -149,8 +154,7 @@ class HealthAlertConfig(BaseModel):
 
 
 class HealthAlertConfigOut(HealthAlertConfig):
-    # Where the worker runs the sampler is the interesting path, not the API's.
-    disk_path: str | None = None
+    """Response shape. The path actually sampled is in ``/health/metrics``."""
 
 
 def _validate_health(body: HealthAlertConfig) -> None:
@@ -165,6 +169,11 @@ def _validate_health(body: HealthAlertConfig) -> None:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "cooldown_minutes must be between 1 and 1440",
+        )
+    if body.disk_path and not body.disk_path.startswith("/"):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "disk_path must be an absolute path (or blank for the export volume)",
         )
     if body.email and not body.recipients:
         raise HTTPException(
@@ -183,10 +192,9 @@ def get_health_alerts(
         **HEALTH_ALERT_DEFAULTS,
         **{k: v for k, v in saved.items() if k in HEALTH_ALERT_DEFAULTS},
     }
-    out = HealthAlertConfigOut(**merged)
-    sample = _health_sample()
-    out.disk_path = sample.get("disk_path") if sample else None
-    return out
+    # The configured value, so the admin form can round-trip it. The path the
+    # sampler actually used is in /health/metrics, which is what the meters show.
+    return HealthAlertConfigOut(**merged)
 
 
 @router.put("/settings/health-alerts")
@@ -198,6 +206,7 @@ def update_health_alerts(
     _validate_health(body)
     value = body.model_dump()
     value["recipients"] = [r.strip() for r in value["recipients"] if r and r.strip()]
+    value["disk_path"] = str(value.get("disk_path") or "").strip()
     row = db.get(AppSetting, HEALTH_ALERTS_KEY)
     if row is None:
         db.add(AppSetting(key=HEALTH_ALERTS_KEY, value=value, updated_by=user.email))

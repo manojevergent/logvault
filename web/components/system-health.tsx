@@ -207,7 +207,9 @@ export function HealthMeters({
         threshold={thresholds.disk}
         detail={
           metrics?.disk_free_gb != null
-            ? `${metrics.disk_free_gb} GB free of ${metrics.disk_total_gb} GB`
+            ? `${metrics.disk_free_gb} GB free of ${metrics.disk_total_gb} GB${
+                metrics.disk_path ? ` on ${metrics.disk_path}` : ""
+              }`
             : "—"
         }
         compact={false}

@@ -277,6 +277,7 @@ function SystemHealthSettings() {
     cpu_threshold_pct: 85,
     memory_threshold_pct: 85,
     disk_threshold_pct: 85,
+    disk_path: "",
     cooldown_minutes: 30,
     slack: true,
     email: false,
@@ -292,6 +293,7 @@ function SystemHealthSettings() {
       cpu_threshold_pct: saved.cpu_threshold_pct,
       memory_threshold_pct: saved.memory_threshold_pct,
       disk_threshold_pct: saved.disk_threshold_pct,
+      disk_path: saved.disk_path ?? "",
       cooldown_minutes: saved.cooldown_minutes,
       slack: saved.slack,
       email: saved.email,
@@ -331,13 +333,13 @@ function SystemHealthSettings() {
           <h2 className="text-lg font-semibold tracking-tight">System health alerts</h2>
           <p className="text-sm text-muted-foreground">
             Alert Slack and/or email when CPU, memory or disk crosses a threshold. Sampled by the
-            worker every beat tick.
+            worker every minute.
           </p>
         </div>
 
         <div className="space-y-3 border-t border-border pt-4">
           <div className="flex items-center justify-between">
-            <h3 className="text-sm font-medium">Current host</h3>
+            <h3 className="text-sm font-medium">Current usage</h3>
             {metrics?.available ? (
               <span className="font-mono text-[11px] text-muted-foreground">
                 {metrics.ts ? new Date(metrics.ts).toLocaleTimeString() : ""}
@@ -415,6 +417,18 @@ function SystemHealthSettings() {
               />
               Monitoring enabled
             </label>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Disk path</Label>
+            <Input
+              value={cfg.disk_path}
+              onChange={(e) => setCfg({ ...cfg, disk_path: e.target.value })}
+              placeholder="/data/exports"
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Leave blank to monitor the export volume. A path that does not exist in the worker
+              falls back to that volume.
+            </p>
           </div>
         </div>
 
