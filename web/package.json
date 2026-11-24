@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "node --test lib/completion.test.ts lib/time.test.ts",
+    "test": "node --test lib/completion.test.ts lib/time.test.ts lib/calendar.test.ts",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write ."
   },

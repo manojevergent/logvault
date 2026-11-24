@@ -15,6 +15,7 @@ import {
 } from "@/components/output-columns-editor";
 import { AutoDetectPanel, type AutoDetectApply } from "@/components/auto-detect-panel";
 import { TemplatePicker } from "@/components/template-picker";
+import { TimeRangePicker } from "@/components/time-range-picker";
 import { exactPhraseRegex, extractGroupNames, parsePhraseInput } from "@/lib/aggregation";
 import {
   FilterTemplate,
@@ -31,7 +32,6 @@ import {
   updateTemplate,
 } from "@/lib/api";
 import {
-  PRESETS,
   Tz,
   ceilToHour,
   epochToLocal,
@@ -1416,68 +1416,19 @@ export default function NewJobPage() {
             {/* Time range */}
             <StepGroup title="Time range">
               <div className="space-y-1.5 sm:col-span-2">
-                <Label>Timezone</Label>
-                <div className="flex items-center gap-2">
-                  {(["UTC", "IST"] as Tz[]).map((z) => (
-                    <button
-                      key={z}
-                      type="button"
-                      onClick={() => setTz(z)}
-                      style={
-                        tz === z
-                          ? { backgroundColor: "#39c463", color: "#000", borderColor: "#39c463" }
-                          : {}
-                      }
-                      className={`border px-6 py-2 text-sm font-semibold transition-colors ${
-                        tz === z
-                          ? "border-transparent"
-                          : "border-border text-muted-foreground hover:text-foreground"
-                      }`}
-                    >
-                      {z}
-                    </button>
-                  ))}
-                </div>
+                <Label>Time range</Label>
+                <TimeRangePicker
+                  start={start}
+                  end={end}
+                  tz={tz}
+                  onChange={(nextStart, nextEnd, nextTz) => {
+                    setTz(nextTz);
+                    setPreset("custom");
+                    setCustomStart(epochToLocal(nextStart, nextTz));
+                    setCustomEnd(epochToLocal(nextEnd, nextTz));
+                  }}
+                />
               </div>
-              <div className="flex flex-wrap items-center gap-2 sm:col-span-2">
-                {PRESETS.map((p) => (
-                  <Button
-                    key={p.label}
-                    type="button"
-                    size="sm"
-                    variant={preset === p.seconds ? "primary" : "outline"}
-                    onClick={() => setPreset(p.seconds)}
-                  >
-                    {p.label}
-                  </Button>
-                ))}
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={preset === "custom" ? "primary" : "outline"}
-                  onClick={() => setPreset("custom")}
-                >
-                  Custom
-                </Button>
-              </div>
-              {preset === "custom" && (
-                <>
-                  <Field label={`Start (${tz})`}>
-                    <Input
-                      type="datetime-local"
-                      value={customStart}
-                      onChange={(e) => setCustomStart(e.target.value)}
-                    />
-                  </Field>
-                  <Field label={`End (${tz})`}>
-                    <Input
-                      type="datetime-local"
-                      value={customEnd}
-                      onChange={(e) => setCustomEnd(e.target.value)}
-                    />
-                  </Field>
-                </>
-              )}
               {recentRanges.length > 0 && (
                 <div className="sm:col-span-2">
                   <p className="mb-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70">
