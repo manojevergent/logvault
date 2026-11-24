@@ -741,13 +741,9 @@ const JobRow = React.memo(function JobRow({
       </td>
       <td
         className="whitespace-nowrap px-2 py-0.5 font-mono text-xs text-muted-foreground"
-        title={`Submitted ${formatEpoch(submitted / 1000, tz)} ${tz}${
-          ran != null ? ` · ran ${formatDuration(ran)}` : ""
-        }`}
+        title={`Submitted ${formatEpoch(submitted / 1000, tz)} ${tz}`}
       >
-        {ran != null
-          ? `ran ${formatDuration(ran)}`
-          : `${formatDuration((now - submitted) / 1000)} ago`}
+        {ran != null ? formatDuration(ran) : formatDuration((now - submitted) / 1000)}
       </td>
       <td
         className={`whitespace-nowrap px-2 py-0.5 text-right font-mono text-xs ${
