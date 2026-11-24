@@ -33,6 +33,11 @@ build/
 *.csv
 celerybeat-schedule
 
+# Build logs and incremental caches
+build.log
+web-build.log
+*.tsbuildinfo
+
 # Editor / OS
 .DS_Store
 .idea/
