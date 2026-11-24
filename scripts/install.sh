@@ -180,6 +180,10 @@ pkg_present() {
 # Start and enable a unit, tolerating the naming differences between distros.
 svc_up() {
   local unit="$1"
+  if (( DRY_RUN )); then
+    printf '%s  + systemctl enable --now %s%s\n' "$C_DIM" "$unit" "$C_OFF" >&2
+    return 0
+  fi
   if systemctl list-unit-files --no-legend 2>/dev/null | awk '{print $1}' | grep -qx "${unit}.service"; then
     svc enable --now "$unit" >/dev/null 2>&1 || svc start "$unit"
     return 0
@@ -206,7 +210,7 @@ pkg_update
 if [[ "$FAMILY" == "debian" ]]; then
   pkg_install ca-certificates curl gnupg git build-essential libpq-dev \
               nginx postgresql postgresql-contrib redis-server \
-              software-properties-common rsync cron
+              software-properties-common rsync cron openssl
   # Ubuntu 22.04 ships Python 3.10; the app needs 3.11+.
   PY_BIN=""
   for cand in python3.12 python3.11; do
@@ -223,7 +227,7 @@ if [[ "$FAMILY" == "debian" ]]; then
 else
   # Amazon Linux 2023: versioned package names, no libpq-dev equivalent.
   pkg_install ca-certificates curl git gcc gcc-c++ make libpq-devel \
-              nginx rsync cronie
+              nginx rsync cronie openssl
 
   PG_PKG=""
   for cand in postgresql16-server postgresql15-server; do
@@ -253,10 +257,16 @@ else
   [[ -n "$PY_BIN" ]] || die "no python3.11+ package in the AL2023 repos"
   pkg_install "$PY_BIN" "${PY_BIN}-devel" "${PY_BIN}-pip" 2>/dev/null || pkg_install "$PY_BIN"
 fi
-info "python: $("$PY_BIN" --version 2>&1)"
+if (( DRY_RUN )); then
+  info "python: would install $PY_BIN"
+else
+  info "python: $("$PY_BIN" --version 2>&1)"
+fi
 
 # Node 20 for the Next.js build. Only needed when the web app is rebuilt.
-if command -v node >/dev/null 2>&1 && [[ "$(node -v | sed 's/^v\([0-9]*\).*/\1/')" -ge 20 ]]; then
+if (( DRY_RUN )); then
+  info "node: would install Node 20"
+elif command -v node >/dev/null 2>&1 && [[ "$(node -v | sed 's/^v\([0-9]*\).*/\1/')" -ge 20 ]]; then
   info "node: $(node -v)"
 elif [[ "$FAMILY" == "rhel" ]] && pkg_install nodejs20 >/dev/null 2>&1; then
   info "node: $(node -v)"
@@ -277,12 +287,12 @@ else
   info "user $APP_USER exists"
 fi
 
-for d in "$APP_DIR" "$DATA_DIR/exports" "$BACKUP_DIR" "$LOG_DIR" "$(dirname "$ENV_FILE")"; do
+for d in "$APP_DIR" "$DATA_DIR/exports" "$BACKUP_DIR" "$LOG_DIR"; do
   run install -d -o "$APP_USER" -g "$APP_USER" -m 0750 "$d"
 done
-# The backup directory holds dumps only; keep it root-readable but app-writable
-# so the backup timer can write without widening anything else.
-run install -d -o "$APP_USER" -g "$APP_USER" -m 0750 "$BACKUP_DIR"
+# The config directory stays root-owned: the app user may read the env file but
+# must not be able to replace it.
+run install -d -o root -g "$APP_USER" -m 0750 "$(dirname "$ENV_FILE")"
 
 # ── PostgreSQL ───────────────────────────────────────────────────────────────
 step "PostgreSQL"
@@ -305,6 +315,8 @@ else
   if [[ -z "$DB_PASSWORD" ]]; then
     if [[ -f "$ENV_FILE" ]] && grep -q '^LOGVAULT_DB_PASSWORD=' "$ENV_FILE"; then
       DB_PASSWORD="$(sed -n 's/^LOGVAULT_DB_PASSWORD=//p' "$ENV_FILE" | head -1)"
+    elif (( DRY_RUN )); then
+      DB_PASSWORD="<generated-on-install>"
     else
       DB_PASSWORD="$(openssl rand -hex 24)"
       info "generated a database password"
@@ -313,7 +325,10 @@ else
 
   # Idempotent role + database creation. psql runs as the postgres superuser
   # over the local socket, so no password is needed for this step.
-  psql_super() { run sudo -u postgres psql -v ON_ERROR_STOP=1 -qtAc "$1"; }
+  psql_super() {
+    if (( DRY_RUN )); then return 0; fi
+    run sudo -u postgres psql -v ON_ERROR_STOP=1 -qtAc "$1"
+  }
 
   if [[ "$(psql_super "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'")" != "1" ]]; then
     run sudo -u postgres psql -v ON_ERROR_STOP=1 -qc \
@@ -365,13 +380,16 @@ step "Application code"
 # The script is run from a checkout. On the first run we copy it into APP_DIR
 # so later `--update` runs can operate on a stable path; if APP_DIR is already
 # a git checkout we leave it alone and let --update pull it.
-if [[ -d "$APP_DIR/.git" ]] && [[ "$(cd "$APP_DIR" && pwd -P)" != "$(cd "$REPO_DIR" && pwd -P)" ]]; then
+REPO_REAL="$(cd "$REPO_DIR" && pwd -P)"
+if [[ -d "$APP_DIR" ]]; then APP_REAL="$(cd "$APP_DIR" && pwd -P)"; else APP_REAL="$APP_DIR"; fi
+
+if [[ -d "$APP_DIR/.git" ]] && [[ "$APP_REAL" != "$REPO_REAL" ]]; then
   info "using existing checkout at $APP_DIR"
   if [[ "$MODE" == "update" ]]; then
     run sudo -u "$APP_USER" git -C "$APP_DIR" fetch --prune origin
     run sudo -u "$APP_USER" git -C "$APP_DIR" pull --ff-only
   fi
-elif [[ "$(cd "$REPO_DIR" && pwd -P)" != "$(cd "$APP_DIR" && pwd -P)" ]]; then
+elif [[ "$REPO_REAL" != "$APP_REAL" ]]; then
   # First install from a checkout that lives somewhere else: copy the tree.
   # .git is kept so --update can pull later.
   run rsync -a --delete \
@@ -386,8 +404,10 @@ else
   info "running from $APP_DIR"
 fi
 
-[[ -f "$APP_DIR/api/requirements.txt" ]] || die "api/requirements.txt missing in $APP_DIR"
-[[ -f "$APP_DIR/worker/requirements.txt" ]] || die "worker/requirements.txt missing in $APP_DIR"
+if (( ! DRY_RUN )); then
+  [[ -f "$APP_DIR/api/requirements.txt" ]] || die "api/requirements.txt missing in $APP_DIR"
+  [[ -f "$APP_DIR/worker/requirements.txt" ]] || die "worker/requirements.txt missing in $APP_DIR"
+fi
 
 # ── Python environments ──────────────────────────────────────────────────────
 step "Python environments"
@@ -420,16 +440,28 @@ API_BASE_URL="${SCHEME}://${PUBLIC_HOST}/api"
 WEB_BASE_URL="${SCHEME}://${PUBLIC_HOST}"
 
 [[ -n "$LAST9_ENCRYPTION_KEY" ]] || LAST9_ENCRYPTION_KEY="$(env_get LAST9_ENCRYPTION_KEY)"
-[[ -n "$LAST9_ENCRYPTION_KEY" ]] || LAST9_ENCRYPTION_KEY="$("$APP_DIR/api/.venv/bin/python" -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
+if [[ -z "$LAST9_ENCRYPTION_KEY" ]]; then
+  if (( DRY_RUN )); then
+    LAST9_ENCRYPTION_KEY="<generated-on-install>"
+  else
+    LAST9_ENCRYPTION_KEY="$("$APP_DIR/api/.venv/bin/python" -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
+  fi
+fi
 [[ -n "$JWT_SECRET" ]]          || JWT_SECRET="$(env_get JWT_SECRET)"
-[[ -n "$JWT_SECRET" ]]          || JWT_SECRET="$(openssl rand -hex 32)"
+if [[ -z "$JWT_SECRET" ]]; then
+  if (( DRY_RUN )); then JWT_SECRET="<generated-on-install>"; else JWT_SECRET="$(openssl rand -hex 32)"; fi
+fi
 INITIAL_ADMIN_EMAIL="${INITIAL_ADMIN_EMAIL:-$(env_get INITIAL_ADMIN_EMAIL)}"
 INITIAL_ADMIN_EMAIL="${INITIAL_ADMIN_EMAIL:-admin@logvault.local}"
 INITIAL_ADMIN_PASSWORD="${INITIAL_ADMIN_PASSWORD:-$(env_get INITIAL_ADMIN_PASSWORD)}"
 GENERATED_ADMIN_PASSWORD=0
 if [[ -z "$INITIAL_ADMIN_PASSWORD" ]]; then
-  INITIAL_ADMIN_PASSWORD="$(openssl rand -hex 12)"
-  GENERATED_ADMIN_PASSWORD=1
+  if (( DRY_RUN )); then
+    INITIAL_ADMIN_PASSWORD="<generated-on-install>"
+  else
+    INITIAL_ADMIN_PASSWORD="$(openssl rand -hex 12)"
+    GENERATED_ADMIN_PASSWORD=1
+  fi
 fi
 
 ENV_TMP="$(mktemp)"
@@ -470,7 +502,7 @@ emit NEXT_PUBLIC_API_BASE_URL "$API_BASE_URL"
 emit LOGVAULT_DB_PASSWORD "$DB_PASSWORD"
 
 run install -m 0640 -o root -g "$APP_USER" "$ENV_TMP" "$ENV_FILE"
-run rm -f "$ENV_TMP"
+rm -f "$ENV_TMP"
 info "wrote $ENV_FILE"
 
 # ── database migrations and admin seed ───────────────────────────────────────
@@ -513,7 +545,7 @@ else
   fi
 fi
 
-NODE_BIN="$(command -v node)"
+NODE_BIN="$(command -v node 2>/dev/null || echo /usr/bin/node)"
 
 # ── systemd services ─────────────────────────────────────────────────────────
 step "systemd services"
@@ -794,7 +826,7 @@ if (( DRY_RUN )); then
 else
   if [[ "$TLS" == "1" ]]; then
     nginx_write_http
-    nginx -t >/dev/null
+    nginx -t >/dev/null || die "nginx rejected the HTTP config"
     svc enable --now nginx >/dev/null 2>&1 || true
     systemctl reload nginx || systemctl start nginx
 
