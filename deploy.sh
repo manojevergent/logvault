@@ -13,7 +13,12 @@ set -e
 cd "$(dirname "$0")"
 
 SERVICES="${*:-api worker web}"
-COMPOSE="docker compose -f docker-compose.yml -f docker-compose.prod.yml"
+# The running stack lives in the `last9_web_app` compose project (the base
+# postgres/redis/backup services were created from E:\last9_web_app). Without
+# an explicit project name this directory would default to `last9_web_app-p1`
+# and deploy a second, parallel stack instead of updating the live one.
+PROJECT="${COMPOSE_PROJECT_NAME:-last9_web_app}"
+COMPOSE="docker compose -p $PROJECT -f docker-compose.yml -f docker-compose.prod.yml"
 
 # beat runs the worker image, so rebuilding worker without recreating beat
 # leaves the scheduler on the previous build. Follow worker automatically.
