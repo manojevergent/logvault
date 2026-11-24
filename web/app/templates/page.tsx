@@ -569,7 +569,8 @@ function TemplateEditForm({
             }
           : null,
       }),
-    onSuccess: () => {
+    onSuccess: (tpl) => {
+      setCustomer(tpl.customer ?? "");
       // The API auto-registers a changed regex; refresh the library so the
       // wizard and detector see it immediately.
       qc.invalidateQueries({ queryKey: ["log-formats"] });
@@ -602,6 +603,7 @@ function TemplateEditForm({
               value={customer}
               onChange={(e) => setCustomer(e.target.value)}
               placeholder="ABSCBN"
+              maxLength={12}
               required
             />
             {!customer.trim() && (

@@ -73,11 +73,20 @@ def _check_source(db: Session, credential_id: int | None, index_target_id: int |
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "unknown index_target_id")
 
 
+CUSTOMER_MAX_LEN = 12
+
+
+def _normalize_customer(value: str | None) -> str | None:
+    """Saved searches file exports under this name, so keep it short and uniform."""
+    cleaned = (value or "").strip().upper()
+    return cleaned[:CUSTOMER_MAX_LEN] or None
+
+
 def _build_aggregation(body: FilterTemplateCreate, prior: dict | None) -> dict | None:
     # A saved search is filed under a customer: it names the export folder and
     # is what the jobs list shows instead of a region. Without it a search's
     # extractions are unidentifiable, so it is not optional at save time.
-    if not (body.customer or "").strip():
+    if not _normalize_customer(body.customer):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "a saved search needs a customer name",
@@ -138,7 +147,7 @@ def create_template(
         exclude_phrases=body.exclude_phrases,
         exclude_exact_phrases=body.exclude_exact_phrases,
         message_types=body.message_types,
-        customer=body.customer.strip() or None,
+        customer=_normalize_customer(body.customer),
         aggregation=agg_dict,
         credential_id=body.credential_id,
         region_code=body.region_code,
@@ -189,7 +198,7 @@ def update_template(
     tpl.exclude_phrases = body.exclude_phrases
     tpl.exclude_exact_phrases = body.exclude_exact_phrases
     tpl.message_types = body.message_types
-    tpl.customer = body.customer.strip() or None
+    tpl.customer = _normalize_customer(body.customer)
     tpl.aggregation = agg_dict
     tpl.credential_id = body.credential_id
     tpl.region_code = body.region_code

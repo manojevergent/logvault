@@ -385,6 +385,7 @@ export default function NewJobPage() {
       qc.invalidateQueries({ queryKey: ["log-formats"] });
       setTemplateId(tpl.id);
       setSearchLabel(tpl.name);
+      setCustomer(tpl.customer ?? "");
       setSavingTemplate(false);
       setTemplateName("");
       setSaveConflict(null);
@@ -416,6 +417,7 @@ export default function NewJobPage() {
       qc.invalidateQueries({ queryKey: ["templates"] });
       qc.invalidateQueries({ queryKey: ["log-formats"] });
       setSearchLabel(tpl.name);
+      setCustomer(tpl.customer ?? "");
       setSaveConflict(null);
     },
     onError: (error: Error, name: string) => {
@@ -447,6 +449,7 @@ export default function NewJobPage() {
       qc.invalidateQueries({ queryKey: ["log-formats"] });
       setTemplateId(tpl.id);
       setSearchLabel(tpl.name);
+      setCustomer(tpl.customer ?? "");
       setSavingTemplate(false);
       setTemplateName("");
       setSaveConflict(null);
@@ -1583,6 +1586,7 @@ export default function NewJobPage() {
                     value={customer}
                     onChange={(e) => setCustomer(e.target.value)}
                     placeholder="ABSCBN"
+                    maxLength={12}
                     required
                   />
                   {!customer.trim() && hasSomethingToSave && (

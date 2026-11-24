@@ -724,8 +724,8 @@ const JobRow = React.memo(function JobRow({
         {extractionName(job) ?? <span className="opacity-40">—</span>}
       </td>
       <td
-        className="max-w-[12rem] truncate px-2 py-0.5 text-xs"
-        title={`Region ${job.region_code}`}
+        className="w-[12ch] max-w-[12ch] truncate px-2 py-0.5 text-xs"
+        title={job.filter_spec?.customer ?? undefined}
       >
         {job.filter_spec?.customer?.trim() ? (
           job.filter_spec.customer

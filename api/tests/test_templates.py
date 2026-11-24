@@ -17,12 +17,12 @@ def _default_customer(client, monkeypatch):
 
     def post(url, *args, **kwargs):
         if url.rstrip("/") == "/templates" and isinstance(kwargs.get("json"), dict):
-            kwargs["json"].setdefault("customer", "TEST_CUSTOMER")
+            kwargs["json"].setdefault("customer", "TEST_CUSTOME")
         return orig_post(url, *args, **kwargs)
 
     def put(url, *args, **kwargs):
         if url.startswith("/templates/") and isinstance(kwargs.get("json"), dict):
-            kwargs["json"].setdefault("customer", "TEST_CUSTOMER")
+            kwargs["json"].setdefault("customer", "TEST_CUSTOME")
         return orig_put(url, *args, **kwargs)
 
     monkeypatch.setattr(client, "post", post)
@@ -35,7 +35,7 @@ def _create(client, name="Entitlements SPID", **over):
         "phrases": ["ClassName", "SPAccountId"],
         "ids": [],
         "message_types": [],
-        "customer": "TEST_CUSTOMER",
+        "customer": "TEST_CUSTOME",
     }
     body.update(over)
     return client.post("/templates", json=body)
@@ -79,12 +79,18 @@ def test_exact_phrases_round_trip(client):
             "name": "status 502",
             "phrases": ["getStatusCode"],
             "exact_phrases": ["API : 502"],
-            "customer": "Shahid",
+            "customer": "SHAHID",
         },
     )
     assert resp.status_code == 201
     assert resp.json()["exact_phrases"] == ["API : 502"]
     assert client.get("/templates").json()[0]["exact_phrases"] == ["API : 502"]
+
+
+def test_customer_is_uppercased_and_limited_to_12_chars(client):
+    resp = _create(client, name="Long customer", customer="  acme-customer-very-long  ")
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["customer"] == "ACME-CUSTOME"
 
 
 def test_a_saved_search_requires_a_customer(client):
@@ -198,14 +204,14 @@ def test_update_changes_filters_and_customer(client):
             "phrases": ["ClassName", "NewPhrase"],
             "ids": ["ID-1"],
             "message_types": [],
-            "customer": "acme",
+            "customer": "ACME",
         },
     )
     assert resp.status_code == 200
     data = resp.json()
     assert data["phrases"] == ["ClassName", "NewPhrase"]
     assert data["ids"] == ["ID-1"]
-    assert data["customer"] == "acme"
+    assert data["customer"] == "ACME"
 
 
 def test_update_can_rename(client):
