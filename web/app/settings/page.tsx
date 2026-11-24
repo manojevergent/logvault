@@ -11,6 +11,7 @@ export default function SettingsPage() {
     ? [
         ["Environment", data.environment],
         ["Default org slug", data.default_org_slug],
+        ["Last9 API base", data.last9_api_base],
         ["Storage directory", data.storage_dir],
         ["Export retention", `${data.export_retention_days} days`],
         ["Download link TTL", `${Math.round(data.download_url_ttl_seconds / 86400)} days`],
@@ -23,7 +24,8 @@ export default function SettingsPage() {
       <div className="space-y-1.5 pb-6">
         <h1 className="text-xl font-semibold tracking-tight">Settings</h1>
         <p className="text-sm text-muted-foreground">
-          Environment configuration (read-only; set via env vars).
+          Environment configuration. The Last9 endpoint is editable in Admin; the rest is set via
+          env vars.
         </p>
       </div>
 

@@ -19,7 +19,7 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 
-from app import artifacts, crypto, db, fenced
+from app import artifacts, crypto, db, fenced, last9_config
 from app.heartbeat import LeaseKeeper
 from app.config import get_settings
 from app.last9 import (
@@ -402,12 +402,15 @@ def run_extraction(job_id: int, *, reclaim: bool = False) -> None:
             ),
             expires_at=cred["access_token_expires_at"],
         ),
-        api_base=settings.last9_api_base,
+        api_base=last9_config.api_base(eng),
         http=http,
         on_rotate=on_rotate,
     )
     client = Last9Client(
-        token_manager=tokens, org_slug=cred["org_slug"], api_base=settings.last9_api_base, http=http
+        token_manager=tokens,
+        org_slug=cred["org_slug"],
+        api_base=last9_config.api_base(eng),
+        http=http,
     )
 
     os.makedirs(settings.storage_dir, exist_ok=True)

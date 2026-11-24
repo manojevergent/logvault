@@ -598,6 +598,8 @@ export type AuditEntry = {
 export type Settings = {
   environment: string;
   default_org_slug: string;
+  /** Active endpoint — the admin-saved BYOC URL when one is set. */
+  last9_api_base: string;
   storage_dir: string;
   export_retention_days: number;
   download_url_ttl_seconds: number;
@@ -627,6 +629,39 @@ export const updateNotificationConfig = (config: Partial<NotificationConfig>) =>
   req<{ ok: boolean; message: string }>("/settings/notifications", {
     method: "PATCH",
     body: JSON.stringify(config),
+  });
+
+// ── Last9 endpoint ──────────────────────────────────────────────────────────
+//
+// The extraction endpoint. SaaS deployments leave it at the default; BYOC
+// deployments point it at the Last9 instance in their own cloud. Saved in the
+// admin UI and read at call time, so a change applies without a redeploy.
+
+export type Last9EndpointConfig = {
+  api_base: string;
+  /** "database" when an admin-saved URL is active, "env" when the fallback is. */
+  source: "database" | "env";
+  default_api_base: string;
+};
+
+export type Last9EndpointTestResult = {
+  ok: boolean;
+  status_code: number | null;
+  message: string;
+};
+
+export const getLast9Endpoint = () => req<Last9EndpointConfig>("/settings/last9");
+
+export const updateLast9Endpoint = (api_base: string) =>
+  req<Last9EndpointConfig>("/settings/last9", {
+    method: "PATCH",
+    body: JSON.stringify({ api_base }),
+  });
+
+export const testLast9Endpoint = (api_base: string) =>
+  req<Last9EndpointTestResult>("/settings/last9/test", {
+    method: "POST",
+    body: JSON.stringify({ api_base }),
   });
 
 // ── system health alerts ────────────────────────────────────────────────────

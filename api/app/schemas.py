@@ -743,6 +743,7 @@ class ScheduleExport(BaseModel):
 class SettingsOut(BaseModel):
     environment: str
     default_org_slug: str
+    last9_api_base: str
     storage_dir: str
     export_retention_days: int
     download_url_ttl_seconds: int

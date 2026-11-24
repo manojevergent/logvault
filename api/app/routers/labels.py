@@ -8,8 +8,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app import crypto
-from app.config import get_settings
+from app import crypto, last9_config
 from app.database import get_db
 from app.last9_oauth import refresh_access_token, token_status
 from app.models import Last9Credential
@@ -42,7 +41,10 @@ def _resolve_token(cred: Last9Credential, db: Session) -> str:
         db.refresh(cred)
         if token_status(cred.access_token_expires_at) == "valid" and cred.encrypted_access_token:
             return crypto.decrypt(cred.encrypted_access_token)
-        result = refresh_access_token(crypto.decrypt(cred.encrypted_refresh_token))
+        result = refresh_access_token(
+            crypto.decrypt(cred.encrypted_refresh_token),
+            api_base=last9_config.api_base(db),
+        )
         cred.encrypted_access_token = crypto.encrypt(result["access_token"])
         cred.access_token_expires_at = result["expires_at"]
         if result.get("refresh_token"):
@@ -59,8 +61,8 @@ def _resolve_token(cred: Last9Credential, db: Session) -> str:
 def list_labels(cid: int, db: Session = Depends(get_db)) -> list[str]:
     cred = _cred_or_404(db, cid)
     token = _resolve_token(cred, db)
-    s = get_settings()
-    url = f"{s.last9_api_base}/organizations/{cred.org_slug}/logs/api/v1/labels"
+    base = last9_config.api_base(db)
+    url = f"{base}/organizations/{cred.org_slug}/logs/api/v1/labels"
     with httpx.Client(timeout=_TIMEOUT) as client:
         r = client.get(url, headers=_headers(token))
     if not r.is_success:
@@ -72,8 +74,8 @@ def list_labels(cid: int, db: Session = Depends(get_db)) -> list[str]:
 def list_label_values(cid: int, label_name: str, db: Session = Depends(get_db)) -> list[str]:
     cred = _cred_or_404(db, cid)
     token = _resolve_token(cred, db)
-    s = get_settings()
-    url = f"{s.last9_api_base}/organizations/{cred.org_slug}/logs/api/v1/label/{label_name}/values"
+    base = last9_config.api_base(db)
+    url = f"{base}/organizations/{cred.org_slug}/logs/api/v1/label/{label_name}/values"
     with httpx.Client(timeout=_TIMEOUT) as client:
         r = client.get(url, headers=_headers(token))
     if not r.is_success:
