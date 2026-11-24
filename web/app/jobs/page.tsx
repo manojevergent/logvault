@@ -18,7 +18,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import * as React from "react";
 import { ImportJsonButton } from "@/components/import-json-button";
 import { Badge } from "@/components/ui/badge";
-import { completionOf } from "@/lib/completion";
+import { completionOf, jobProgress } from "@/lib/completion";
 import { Button } from "@/components/ui/button";
 import {
   API_BASE,
@@ -65,6 +65,14 @@ function extractionName(job: Job): string | null {
   const label = job.filter_spec?.label;
   if (!label) return null;
   return label.replace(/^INVOICE_/, "");
+}
+
+/** Colour the progress bar by the row's status; the number is the same either way. */
+function progressTone(status: JobStatus): string {
+  if (status === "completed") return "bg-success";
+  if (status === "failed") return "bg-danger";
+  if (status === "paused" || status === "canceled") return "bg-warning";
+  return "bg-primary";
 }
 
 export default function JobsPage() {
@@ -527,7 +535,7 @@ function JobsPageContent() {
 
       {filtered && filtered.length > 0 && (
         <>
-          <div className="border border-border">
+          <div className="overflow-x-auto border border-border">
             <table className="w-full text-sm">
               <thead className="sticky top-0 z-10 bg-surface text-xs uppercase tracking-wide text-muted-foreground shadow-[inset_0_-1px_0_hsl(var(--border))]">
                 <tr>
@@ -542,6 +550,12 @@ function JobsPageContent() {
                     />
                   </th>
                   <th className="whitespace-nowrap px-2 py-1 text-left font-medium">Status</th>
+                  <th
+                    className="whitespace-nowrap px-2 py-1 text-left font-medium"
+                    title="Chunks completed out of the total the worker planned"
+                  >
+                    Progress
+                  </th>
                   <th className="whitespace-nowrap px-2 py-1 text-left font-medium">Extraction</th>
                   <th className="whitespace-nowrap px-2 py-1 text-left font-medium">Customer</th>
                   <th className="whitespace-nowrap px-2 py-1 text-left font-medium">
@@ -660,6 +674,15 @@ const JobRow = React.memo(function JobRow({
     },
   });
   const completion = completionOf(job);
+  const pct = jobProgress(job);
+  const progressTitle =
+    job.status === "completed"
+      ? "Completed"
+      : job.total_chunks > 0
+        ? `${job.completed_chunks.toLocaleString()} of ${job.total_chunks.toLocaleString()} chunks completed`
+        : job.status === "running"
+          ? "Running — waiting for the first chunk"
+          : "No chunks completed yet";
   return (
     <tr className={`hover:bg-accent/40 ${selected ? "bg-accent/30" : ""}`}>
       <td className="px-2 py-0.5">
@@ -686,6 +709,27 @@ const JobRow = React.memo(function JobRow({
               {completion.label}
             </Badge>
           )}
+        </div>
+      </td>
+      <td className="px-2 py-0.5">
+        <div className="flex items-center gap-1.5" title={progressTitle}>
+          <div
+            className="h-1.5 w-16 overflow-hidden bg-muted"
+            role="progressbar"
+            aria-label={`Job ${job.id} progress`}
+            aria-valuenow={pct}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuetext={`${pct}%`}
+          >
+            <div
+              className={`h-full transition-all duration-500 ${progressTone(job.status)}`}
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          <span className="w-9 text-right font-mono text-[11px] tabular-nums text-muted-foreground">
+            {pct}%
+          </span>
         </div>
       </td>
       <td

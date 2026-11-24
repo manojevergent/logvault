@@ -45,7 +45,7 @@ import {
   retryS3Upload,
   useRole,
 } from "@/lib/api";
-import { completionOf, gapSummary } from "@/lib/completion";
+import { completionOf, gapSummary, jobProgress } from "@/lib/completion";
 import { formatDuration, formatRange, useTz } from "@/lib/time";
 
 type Progress = {
@@ -227,13 +227,9 @@ export default function JobDetailPage() {
   const rows = progress?.rows_written ?? job?.rows_written ?? 0;
   const completed = progress?.completed_chunks ?? job?.completed_chunks ?? 0;
   const total = progress?.total_chunks ?? job?.total_chunks ?? 0;
-  // A completed job is 100% by definition. `total_chunks` is an estimate that
-  // the worker re-fits as it adapts chunk size, and runs finished before that
-  // re-fit still carry the old denominator — that is how a job completed at
-  // "13 / 25" (52%). The status is the authority for finished work; in-flight
-  // jobs keep the live ratio.
-  const pct =
-    status === "completed" ? 100 : total ? Math.min(100, Math.round((completed / total) * 100)) : 0;
+  // The status is the authority for finished work; in-flight jobs keep the live
+  // chunk ratio. See jobProgress for why a completed job can read "13 / 25".
+  const pct = jobProgress({ status, completed_chunks: completed, total_chunks: total });
   const done = TERMINAL.includes(status);
 
   React.useEffect(() => {

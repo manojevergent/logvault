@@ -62,6 +62,29 @@ export function isPartial(job: JobLike | null | undefined): boolean {
   return completionOf(job).isPartial;
 }
 
+type ProgressJob = {
+  status: string;
+  completed_chunks?: number | null;
+  total_chunks?: number | null;
+};
+
+/**
+ * Percentage of a job's chunks that are done, 0–100.
+ *
+ * A completed job is 100% by definition. `total_chunks` is an estimate the
+ * worker re-fits as it adapts chunk size, and runs finished before that re-fit
+ * still carry the old denominator — that is how a job completed at "13 / 25"
+ * (52%). The status is the authority for finished work; in-flight jobs keep the
+ * live ratio. Missing/legacy fields and a zero total read as 0%.
+ */
+export function jobProgress(job: ProgressJob | null | undefined): number {
+  if (job?.status === "completed") return 100;
+  const total = normalizeCount(job?.total_chunks);
+  if (total === 0) return 0;
+  const completed = normalizeCount(job?.completed_chunks);
+  return Math.min(100, Math.max(0, Math.round((completed / total) * 100)));
+}
+
 /** Human-readable summary for a details pane. Empty for ordinary jobs. */
 export function gapSummary(job: JobLike | null | undefined): string {
   const info = completionOf(job);

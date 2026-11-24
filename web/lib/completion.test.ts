@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { completionOf, gapSummary, isPartial } from "./completion.ts";
+import { completionOf, gapSummary, isPartial, jobProgress } from "./completion.ts";
 
 test("complete job shows no partial marker", () => {
   const c = completionOf({ completion_state: "complete", gap_count: 0, gap_reason: null });
@@ -56,4 +56,34 @@ test("malformed values never throw", () => {
   assert.equal(completionOf({ gap_count: -5 as number }).gapCount, 0);
   assert.equal(completionOf({ gap_count: Number.NaN as number }).gapCount, 0);
   assert.equal(completionOf({ completion_state: "bogus" }).state, "unknown");
+});
+
+test("a completed job is 100% even when the chunk denominator is stale", () => {
+  assert.equal(jobProgress({ status: "completed", completed_chunks: 13, total_chunks: 25 }), 100);
+  assert.equal(jobProgress({ status: "completed", completed_chunks: 0, total_chunks: 0 }), 100);
+});
+
+test("a running job uses the live chunk ratio", () => {
+  assert.equal(jobProgress({ status: "running", completed_chunks: 3, total_chunks: 10 }), 30);
+  assert.equal(jobProgress({ status: "paused", completed_chunks: 9, total_chunks: 10 }), 90);
+});
+
+test("progress is 0 before the first chunk total exists", () => {
+  assert.equal(jobProgress({ status: "queued", completed_chunks: 0, total_chunks: 0 }), 0);
+  assert.equal(jobProgress({ status: "running", completed_chunks: 0, total_chunks: 0 }), 0);
+  assert.equal(jobProgress(null), 0);
+});
+
+test("failed and canceled jobs report the chunks they completed", () => {
+  assert.equal(jobProgress({ status: "failed", completed_chunks: 2, total_chunks: 10 }), 20);
+  assert.equal(jobProgress({ status: "canceled", completed_chunks: 10, total_chunks: 10 }), 100);
+});
+
+test("progress clamps malformed or overrun counts", () => {
+  assert.equal(jobProgress({ status: "running", completed_chunks: 12, total_chunks: 10 }), 100);
+  assert.equal(jobProgress({ status: "failed", completed_chunks: -1, total_chunks: 10 }), 0);
+  assert.equal(
+    jobProgress({ status: "running", completed_chunks: Number.NaN, total_chunks: 10 }),
+    0
+  );
 });
