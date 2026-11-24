@@ -26,6 +26,92 @@ def _env_defaults() -> dict:
     return {f: getattr(settings, f) for f in _FIELDS}
 
 
+def _render_alert_html(subject: str, body: str) -> str:
+    """An email-client-safe HTML card for a plain-text alert.
+
+    Inline styles and a table layout only: Gmail, Outlook and Apple Mail strip
+    <style> blocks and external CSS. The plain-text body is still attached as
+    the alternative part, so text-only clients see the original message.
+    """
+    import html as _html
+    from datetime import UTC, datetime
+
+    recovered = "recovered" in subject.lower()
+    accent = "#16a34a" if recovered else "#d97706"
+    badge_bg = "#ecfdf5" if recovered else "#fffbeb"
+    badge_fg = "#047857" if recovered else "#b45309"
+    badge = "Recovered" if recovered else "Action required"
+
+    title = subject.split(":", 1)[1].strip() if ":" in subject else subject
+    paragraphs = [p.strip() for p in body.strip().split("\n\n") if p.strip()]
+    first = paragraphs[0].splitlines() if paragraphs else [title]
+    lead = first[0].strip() if first else title
+    details = [line.strip() for line in first[1:] if line.strip()]
+    note = paragraphs[1:]
+
+    stamp = datetime.now(UTC).strftime("%d %b %Y, %H:%M UTC")
+
+    def esc(value: str) -> str:
+        return _html.escape(value, quote=True)
+
+    detail_rows = "".join(
+        '<tr><td style="padding:10px 0;border-top:1px solid #eef2f7;'
+        'color:#475569;font-size:13px;line-height:1.55;">' + esc(d) + "</td></tr>"
+        for d in details
+    )
+    detail_html = (
+        '<tr><td style="padding:6px 28px 0;">'
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0">'
+        + detail_rows
+        + "</table></td></tr>"
+        if details
+        else ""
+    )
+    note_html = "".join(
+        '<p style="margin:0 0 10px;color:#475569;font-size:13px;line-height:1.65;">'
+        + esc(p)
+        + "</p>"
+        for p in note
+    )
+    note_html = (
+        '<tr><td style="padding:18px 28px 0;">' + note_html + "</td></tr>" if note_html else ""
+    )
+
+    return f"""<!doctype html>
+<html lang="en">
+<body style="margin:0;padding:0;background:#f4f6f9;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6f9;padding:32px 16px;">
+<tr><td align="center">
+<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:100%;max-width:600px;background:#ffffff;border:1px solid #e6eaf0;border-radius:0;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+<tr><td style="background:#0a1f44;padding:20px 28px;">
+<table role="presentation" width="100%"><tr>
+<td style="color:#ffffff;font-size:18px;font-weight:700;letter-spacing:-0.2px;">LogVault</td>
+<td align="right" style="color:#94a3b8;font-size:10px;font-weight:600;letter-spacing:1.4px;text-transform:uppercase;">System alert</td>
+</tr></table>
+</td></tr>
+<tr><td style="height:4px;background:{accent};font-size:0;line-height:0;">&nbsp;</td></tr>
+<tr><td style="padding:26px 28px 0;">
+<span style="display:inline-block;background:{badge_bg};color:{badge_fg};font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;padding:6px 10px;border-radius:0;">{badge}</span>
+<h1 style="margin:14px 0 6px;font-size:22px;line-height:1.3;color:#0f172a;font-weight:700;">{esc(title)}</h1>
+<p style="margin:0;color:#475569;font-size:14px;line-height:1.6;">{esc(lead)}</p>
+</td></tr>
+{detail_html}
+{note_html}
+<tr><td style="padding:24px 28px 26px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;border:1px solid #eef2f7;border-radius:0;">
+<tr><td style="padding:14px 16px;color:#64748b;font-size:12px;line-height:1.6;">
+Automated alert from LogVault &middot; {stamp}<br>
+Manage alert thresholds and recipients in LogVault.
+</td></tr>
+</table>
+</td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>"""
+
+
 def load_config(db=None) -> dict:
     """Saved config over env defaults, with the SMTP password decrypted.
 
@@ -73,8 +159,27 @@ def save_config(db, cfg: dict, updated_by: str | None = None) -> None:
         row.updated_by = updated_by
 
 
+def _post_slack(webhook: str, payload: dict) -> None:
+    """Post to a Slack webhook and fail loudly when Slack rejects it.
+
+    A revoked webhook answers 404 ``no_service`` and a malformed payload
+    answers 400, both as ordinary responses. Without raise_for_status() every
+    one of those looked like a delivered message, so a dead webhook reported
+    "sent" for as long as nobody read the Slack channel. Raising here puts the
+    rejection into _retry and into the per-channel result the caller reports.
+    """
+    response = httpx.post(webhook, json=payload, timeout=10)
+    response.raise_for_status()
+
+
 def _retry(func, max_retries: int = None, delay: int = None):
-    """Retry a function with exponential backoff."""
+    """Retry a function with linear backoff.
+
+    ``max_retries`` is the total number of attempts, not the number of retries
+    after the first. Each wait is ``delay * attempt`` — 5s, 10s, 15s — so this is
+    linear, not exponential. With the defaults a failed alert can hold a worker
+    slot for about two minutes.
+    """
     if max_retries is None:
         max_retries = settings.notification_max_retries
     if delay is None:
@@ -94,7 +199,7 @@ def _retry(func, max_retries: int = None, delay: int = None):
                     delay=delay,
                     error=str(exc),
                 )
-                time.sleep(delay * attempt)  # exponential: 5s, 10s, 15s
+                time.sleep(delay * attempt)  # linear: 5s, 10s, 15s
     raise last_exc
 
 
@@ -152,6 +257,7 @@ Check the job details at the LogVault dashboard.
 """
     part = MIMEText(text, "plain")
     msg.attach(part)
+    msg.attach(MIMEText(_render_alert_html(msg["Subject"], text), "html"))
 
     server = smtplib.SMTP(cfg["smtp_host"], int(cfg["smtp_port"]), timeout=30)
     try:
@@ -196,7 +302,7 @@ def _send_slack(
         ],
     }
 
-    httpx.post(cfg["slack_webhook_url"], json=payload, timeout=10)
+    _post_slack(cfg["slack_webhook_url"], payload)
     log.info("slack.sent", schedule=schedule_name, job_id=job_id)
 
 
@@ -292,6 +398,7 @@ def _send_plain_email(cfg: dict, recipients: list[str], subject: str, body: str)
     msg["From"] = cfg["smtp_from"]
     msg["To"] = ", ".join(recipients)
     msg.attach(MIMEText(body, "plain"))
+    msg.attach(MIMEText(_render_alert_html(subject, body), "html"))
 
     server = _smtp_connection(cfg)
     try:
@@ -314,5 +421,5 @@ def _send_slack_text(webhook: str, subject: str, body: str) -> None:
             }
         ],
     }
-    httpx.post(webhook, json=payload, timeout=10)
+    _post_slack(webhook, payload)
     log.info("slack.health_sent", subject=subject)

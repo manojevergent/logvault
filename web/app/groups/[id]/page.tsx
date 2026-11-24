@@ -1,25 +1,28 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Download, Loader2, RefreshCw, X } from "lucide-react";
+import { ArrowLeft, Download, Loader2, PencilLine, RefreshCw, X } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import * as React from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { RerunGroupDialog } from "@/components/rerun-group-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   API_BASE,
   GroupDetail,
+  GroupRerunInput,
   GroupStatus,
   Job,
   cancelGroup,
   getGroup,
   listIndexes,
+  rerunGroup,
   retryGroup,
 } from "@/lib/api";
-import { formatEpoch } from "@/lib/time";
+import { Tz, formatEpoch, useTz } from "@/lib/time";
 
 const GROUP_STATUS: Record<
   GroupStatus,
@@ -48,17 +51,17 @@ const JOB_STATUS: Record<
 const num = (value: number) => value.toLocaleString("en-US");
 const active = (group: GroupDetail) => group.status === "queued" || group.status === "running";
 
-function fmtWhen(value: string | null | undefined): string {
+function fmtWhen(value: string | null | undefined, tz: Tz = "UTC"): string {
   if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "—";
   return `${date.toLocaleString("en-GB", {
-    timeZone: "UTC",
+    timeZone: tz === "IST" ? "Asia/Kolkata" : "UTC",
     day: "2-digit",
     month: "short",
     hour: "2-digit",
     minute: "2-digit",
-  })} UTC`;
+  })} ${tz}`;
 }
 
 function JobRow({ job, source }: { job: Job; source: string }) {
@@ -109,12 +112,20 @@ export default function GroupDetailPage() {
   const id = Number(useParams().id);
   const router = useRouter();
   const qc = useQueryClient();
+  const [tz, setTz] = useTz();
   const [confirmCancel, setConfirmCancel] = React.useState(false);
+  const [rerunOpen, setRerunOpen] = React.useState(false);
 
   const group = useQuery({
     queryKey: ["group", id],
     queryFn: () => getGroup(id),
-    refetchInterval: 4_000,
+    // Poll only while the group is still moving. A finished group's page used to
+    // poll forever, and each poll stats every job's output file on the volume
+    // that also hosts pgdata.
+    refetchInterval: (query) => {
+      const data = query.state.data as GroupDetail | undefined;
+      return data && active(data) ? 4_000 : false;
+    },
     enabled: Number.isFinite(id),
   });
   const indexes = useQuery({ queryKey: ["indexes", ""], queryFn: () => listIndexes() });
@@ -130,6 +141,14 @@ export default function GroupDetailPage() {
   const retry = useMutation({
     mutationFn: () => retryGroup(id),
     onSuccess: (created) => {
+      qc.invalidateQueries({ queryKey: ["groups"] });
+      router.push(`/groups/${created.id}`);
+    },
+  });
+  const rerun = useMutation({
+    mutationFn: (body: GroupRerunInput) => rerunGroup(id, body),
+    onSuccess: (created) => {
+      setRerunOpen(false);
       qc.invalidateQueries({ queryKey: ["groups"] });
       router.push(`/groups/${created.id}`);
     },
@@ -205,11 +224,28 @@ export default function GroupDetailPage() {
           </div>
           <p className="mt-0.5 text-xs text-muted-foreground">
             {data.total_jobs} search{data.total_jobs === 1 ? "" : "es"} ·{" "}
-            {formatEpoch(data.start_epoch)} → {formatEpoch(data.end_epoch)} UTC
-            {data.created_by ? ` · ${data.created_by}` : ""} · {fmtWhen(data.created_at)}
+            <button
+              type="button"
+              onClick={() => setTz(tz === "IST" ? "UTC" : "IST")}
+              className="uppercase tracking-wide underline decoration-dotted underline-offset-2 hover:text-foreground"
+              title={`Showing ${tz} — click to switch`}
+            >
+              {formatEpoch(data.start_epoch, tz)} → {formatEpoch(data.end_epoch, tz)} ({tz})
+            </button>
+            {data.created_by ? ` · ${data.created_by}` : ""} · {fmtWhen(data.created_at, tz)}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={rerun.isPending || data.total_jobs === 0}
+            onClick={() => setRerunOpen(true)}
+            title="Re-run these searches with an edited window and settings"
+          >
+            <PencilLine className="h-3.5 w-3.5" />
+            Re-run with edit
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -323,10 +359,26 @@ export default function GroupDetailPage() {
 
       <p className="mt-2 text-[11px] leading-5 text-muted-foreground">
         Each search runs as its own job against the index saved with it, so one failure never stops
-        the others. Retry failed creates a new group with only the failed/canceled searches; the
-        original group and its files stay intact. Cancel stops active jobs and keeps whatever they
-        already wrote as partial output.
+        the others. Retry failed creates a new group with only the failed/canceled searches; Re-run
+        with edit repeats any selection of these searches over a new window or with different run
+        settings. Either way the original group and its files stay intact. Cancel stops active jobs
+        and keeps whatever they already wrote as partial output.
       </p>
+
+      <RerunGroupDialog
+        open={rerunOpen}
+        group={data}
+        tz={tz}
+        pending={rerun.isPending}
+        error={rerun.isError ? (rerun.error as Error).message : null}
+        onSubmit={(body) => rerun.mutate(body)}
+        onCancel={() => {
+          if (!rerun.isPending) {
+            setRerunOpen(false);
+            rerun.reset();
+          }
+        }}
+      />
 
       <ConfirmDialog
         open={confirmCancel}

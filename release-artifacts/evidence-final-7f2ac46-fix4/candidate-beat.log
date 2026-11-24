@@ -1,0 +1,38 @@
+﻿beat_guard: acquired logvault:beat:lock as 85eb35227cf1:1
+docker : [2026-11-15 14:58:33,190: INFO/MainProcess] beat: Starting...
+At E:\last9_web_app-p1\release-artifacts\evidence-final-7f2ac46-fix4\run_candidate_acceptance.ps1:231 char:1
++ docker logs r1acc-beat 2>&1 | Out-File -Encoding utf8 "$Evidence\cand ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([2026-11-15 14:...at: Starting...:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+celery beat v5.4.0 (opalescent) is starting.
+__    -    ... __   -        _
+LocalTime -> 2026-11-15 14:58:33
+Configuration ->
+    . broker -> redis://r1acc-redis:6379/1
+    . loader -> celery.loaders.app.AppLoader
+    . scheduler -> celery.beat.PersistentScheduler
+    . db -> celerybeat-schedule
+    . logfile -> [stderr]@%INFO
+    . maxinterval -> 5.00 minutes (300s)
+[2026-11-15 14:58:38,214: INFO/MainProcess] Scheduler: Sending due task publish-outbox (logvault.publish_outbox)
+[2026-11-15 14:58:43,205: INFO/MainProcess] Scheduler: Sending due task publish-outbox (logvault.publish_outbox)
+[2026-11-15 14:58:48,205: INFO/MainProcess] Scheduler: Sending due task reconcile-leases (logvault.reconcile_leases)
+[2026-11-15 14:58:48,207: INFO/MainProcess] Scheduler: Sending due task publish-outbox (logvault.publish_outbox)
+[2026-11-15 14:58:53,206: INFO/MainProcess] Scheduler: Sending due task publish-outbox (logvault.publish_outbox)
+[2026-11-15 14:58:58,206: INFO/MainProcess] Scheduler: Sending due task publish-outbox (logvault.publish_outbox)
+[2026-11-15 14:59:03,205: INFO/MainProcess] Scheduler: Sending due task reconcile-leases (logvault.reconcile_leases)
+[2026-11-15 14:59:03,207: INFO/MainProcess] Scheduler: Sending due task publish-outbox (logvault.publish_outbox)
+[2026-11-15 14:59:08,207: INFO/MainProcess] Scheduler: Sending due task publish-outbox (logvault.publish_outbox)
+[2026-11-15 14:59:13,207: INFO/MainProcess] Scheduler: Sending due task publish-outbox (logvault.publish_outbox)
+[2026-11-15 14:59:18,205: INFO/MainProcess] Scheduler: Sending due task reconcile-leases (logvault.reconcile_leases)
+[2026-11-15 14:59:18,207: INFO/MainProcess] Scheduler: Sending due task publish-outbox (logvault.publish_outbox)
+[2026-11-15 14:59:23,207: INFO/MainProcess] Scheduler: Sending due task publish-outbox (logvault.publish_outbox)
+[2026-11-15 14:59:28,207: INFO/MainProcess] Scheduler: Sending due task publish-outbox (logvault.publish_outbox)
+[2026-11-15 14:59:33,205: INFO/MainProcess] Scheduler: Sending due task scan-schedules (logvault.scan_schedules)
+[2026-11-15 14:59:33,206: INFO/MainProcess] Scheduler: Sending due task system-health (logvault.check_system_health)
+[2026-11-15 14:59:33,207: INFO/MainProcess] Scheduler: Sending due task reconcile-leases (logvault.reconcile_leases)
+[2026-11-15 14:59:33,208: INFO/MainProcess] Scheduler: Sending due task publish-outbox (logvault.publish_outbox)
+[2026-11-15 14:59:38,208: INFO/MainProcess] Scheduler: Sending due task publish-outbox (logvault.publish_outbox)
+[2026-11-15 14:59:43,208: INFO/MainProcess] Scheduler: Sending due task publish-outbox (logvault.publish_outbox)

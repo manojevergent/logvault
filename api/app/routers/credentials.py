@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app import audit, crypto
+from app import audit, crypto, last9_config
 from app.database import get_db
 from app.deps import require_admin
 from app.last9_oauth import refresh_access_token, token_status
@@ -93,7 +93,10 @@ def delete_credential(
 def test_connection(cred_id: int, db: Session = Depends(get_db)) -> TestConnectionResult:
     cred = _get_or_404(db, cred_id)
     try:
-        result = refresh_access_token(crypto.decrypt(cred.encrypted_refresh_token))
+        result = refresh_access_token(
+            crypto.decrypt(cred.encrypted_refresh_token),
+            api_base=last9_config.api_base(db),
+        )
     except (ValueError, httpx.HTTPError) as exc:
         return TestConnectionResult(ok=False, message=str(exc), token_status="expired")
 

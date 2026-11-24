@@ -1,0 +1,11 @@
+﻿INFO:     172.21.0.1:56696 - "GET /health/dispatch HTTP/1.1" 200 OK
+docker : INFO:     Started server process [1]
+At line:1 char:807
++ ...  utf8 "$ev\smoke-worker-log.txt"; docker logs r1fix4_api 2>&1 | Selec ...
++                                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (INFO:     Started server process [1]:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)

@@ -15,6 +15,7 @@ import {
 } from "@/components/output-columns-editor";
 import { AutoDetectPanel, type AutoDetectApply } from "@/components/auto-detect-panel";
 import { TemplatePicker } from "@/components/template-picker";
+import { TimeRangePicker } from "@/components/time-range-picker";
 import { exactPhraseRegex, extractGroupNames, parsePhraseInput } from "@/lib/aggregation";
 import {
   FilterTemplate,
@@ -30,7 +31,14 @@ import {
   listTemplates,
   updateTemplate,
 } from "@/lib/api";
-import { PRESETS, Tz, epochToLocal, formatEpoch, localToEpoch } from "@/lib/time";
+import {
+  Tz,
+  ceilToHour,
+  epochToLocal,
+  floorToHour,
+  formatEpoch,
+  localToEpoch,
+} from "@/lib/time";
 import { SavedRange, getRecentRanges, saveRange } from "@/lib/timestamps";
 
 // Each word is matched independently (like Last9's "contains all words"), not
@@ -177,6 +185,10 @@ export default function NewJobPage() {
   // UTC by default: the application timestamps its logs in UTC, so a range
   // typed in UTC is the one that lines up with what's actually in the index.
   const [tz, setTz] = React.useState<Tz>("UTC");
+  // Default CSV timestamp header for this job's timezone: UTC exports use
+  // `timestamp`; IST exports use `timestamp_ist`. A header the user typed is
+  // left alone (see the effect below).
+  const defaultTimestampHeader = tz === "IST" ? "timestamp_ist" : "timestamp";
   const [preset, setPreset] = React.useState<number | "custom">(3600);
   const nowSec = Math.floor(Date.now() / 1000);
   const [customStart, setCustomStart] = React.useState(epochToLocal(nowSec - 3600, "UTC"));
@@ -319,7 +331,7 @@ export default function NewJobPage() {
       setColSeq(seq);
       setColLabels({ ...(agg.column_labels ?? {}) });
       setColDefaults({ ...(agg.raw_column_defaults ?? {}) });
-      setTimestampHeader(agg.timestamp_column ?? "timestamp_utc");
+      setTimestampHeader(agg.timestamp_column ?? defaultTimestampHeader);
       setIncludeLogFormat(agg.include_log_format ?? true);
       setIncludeMessageColumn(agg.include_message ?? true);
     } else {
@@ -327,7 +339,7 @@ export default function NewJobPage() {
       setColSeq({});
       setColLabels({});
       setColDefaults({});
-      setTimestampHeader("timestamp_utc");
+      setTimestampHeader(defaultTimestampHeader);
       setIncludeLogFormat(true);
       setIncludeMessageColumn(true);
     }
@@ -363,7 +375,7 @@ export default function NewJobPage() {
             include_message: includeMessageColumn,
             column_labels: columnLabels,
             raw_column_defaults: columnDefaults,
-            timestamp_column: timestampHeader.trim() || "timestamp_utc",
+            timestamp_column: timestampHeader.trim() || defaultTimestampHeader,
           }
         : null,
     };
@@ -381,6 +393,7 @@ export default function NewJobPage() {
       qc.invalidateQueries({ queryKey: ["log-formats"] });
       setTemplateId(tpl.id);
       setSearchLabel(tpl.name);
+      setCustomer(tpl.customer ?? "");
       setSavingTemplate(false);
       setTemplateName("");
       setSaveConflict(null);
@@ -412,6 +425,7 @@ export default function NewJobPage() {
       qc.invalidateQueries({ queryKey: ["templates"] });
       qc.invalidateQueries({ queryKey: ["log-formats"] });
       setSearchLabel(tpl.name);
+      setCustomer(tpl.customer ?? "");
       setSaveConflict(null);
     },
     onError: (error: Error, name: string) => {
@@ -443,6 +457,7 @@ export default function NewJobPage() {
       qc.invalidateQueries({ queryKey: ["log-formats"] });
       setTemplateId(tpl.id);
       setSearchLabel(tpl.name);
+      setCustomer(tpl.customer ?? "");
       setSavingTemplate(false);
       setTemplateName("");
       setSaveConflict(null);
@@ -598,13 +613,23 @@ export default function NewJobPage() {
   const [colSeq, setColSeq] = React.useState<Record<string, number>>({});
   const [colLabels, setColLabels] = React.useState<Record<string, string>>({});
   const [colDefaults, setColDefaults] = React.useState<Record<string, string>>({});
-  const [timestampHeader, setTimestampHeader] = React.useState("timestamp_utc");
+  const [timestampHeader, setTimestampHeader] = React.useState(defaultTimestampHeader);
   // log_format (which pattern matched) and message (the raw line) are the two
   // columns that AREN'T a regex field — kept as their own toggles rather than
   // folded into the checklist above, since nothing to check them against
   // exists until a regex is typed.
   const [includeLogFormat, setIncludeLogFormat] = React.useState(true);
   const [includeMessageColumn, setIncludeMessageColumn] = React.useState(true);
+
+  // Keep the default header in step with the timezone choice. Only the three
+  // known defaults change; a header the user typed is preserved.
+  React.useEffect(() => {
+    setTimestampHeader((prev) =>
+      prev === "timestamp" || prev === "timestamp_ist" || prev === "timestamp_utc"
+        ? defaultTimestampHeader
+        : prev
+    );
+  }, [defaultTimestampHeader]);
 
   const groupBy = React.useMemo(() => splitFieldNames(groupByText), [groupByText]);
   const uniqueFields = React.useMemo(() => splitFieldNames(uniqueFieldsText), [uniqueFieldsText]);
@@ -670,7 +695,9 @@ export default function NewJobPage() {
     });
     setColSeq(seq);
     setColLabels(layout.columnLabels);
-    setTimestampHeader(layout.timestampColumn);
+    // The uniform layout's default is the UTC header; honour the selected
+    // timezone instead (timestamp vs timestamp_ist).
+    setTimestampHeader(defaultTimestampHeader);
     setIncludedFieldsOverride(new Set(layout.rawColumns));
     // A uniform extract is parsed fields only — drop the synthetic columns.
     setIncludeLogFormat(false);
@@ -718,7 +745,7 @@ export default function NewJobPage() {
     setColSeq({});
     setColLabels({});
     setColDefaults({});
-    setTimestampHeader("timestamp_utc");
+    setTimestampHeader(defaultTimestampHeader);
     setIncludeLogFormat(true);
     setIncludeMessageColumn(true);
   }
@@ -800,8 +827,16 @@ export default function NewJobPage() {
     setPreset("custom");
     // Must use the zone the fields are read back in (`tz`), not a fixed one —
     // otherwise cloning while the toggle is on the other zone shifts the range.
-    setCustomStart(epochToLocal(cloneJob.start_epoch, tz));
-    setCustomEnd(epochToLocal(cloneJob.end_epoch, tz));
+    //
+    // Snap to the enclosing whole hours in that zone. A source window can start
+    // mid-hour (e.g. 00:01 from an earlier "last hour" run); "Edit & run" then
+    // prefills 00:01, and changing only the date silently keeps that minute, so
+    // a day-based rerun starts at 00:01 instead of 00:00. Rounding the start
+    // down and the end up means the new window always covers the original and
+    // begins exactly on the hour the user picked. The fields stay editable, so
+    // an intentionally odd time can still be typed in.
+    setCustomStart(epochToLocal(floorToHour(cloneJob.start_epoch, tz), tz));
+    setCustomEnd(epochToLocal(ceilToHour(cloneJob.end_epoch, tz), tz));
     const agg = cloneJob.filter_spec.aggregation;
     setAggEnabled(Boolean(agg?.enabled));
     if (agg?.enabled) {
@@ -821,7 +856,7 @@ export default function NewJobPage() {
       setColSeq(seq);
       setColLabels({ ...(agg.column_labels ?? {}) });
       setColDefaults({ ...(agg.raw_column_defaults ?? {}) });
-      setTimestampHeader(agg.timestamp_column ?? "timestamp_utc");
+      setTimestampHeader(agg.timestamp_column ?? defaultTimestampHeader);
       setIncludeLogFormat(agg.include_log_format ?? true);
       setIncludeMessageColumn(agg.include_message ?? true);
     }
@@ -928,7 +963,7 @@ export default function NewJobPage() {
               include_message: includeMessageColumn,
               column_labels: columnLabels,
               raw_column_defaults: columnDefaults,
-              timestamp_column: timestampHeader.trim() || "timestamp_utc",
+              timestamp_column: timestampHeader.trim() || defaultTimestampHeader,
             }
           : null,
       }),
@@ -1381,68 +1416,19 @@ export default function NewJobPage() {
             {/* Time range */}
             <StepGroup title="Time range">
               <div className="space-y-1.5 sm:col-span-2">
-                <Label>Timezone</Label>
-                <div className="flex items-center gap-2">
-                  {(["UTC", "IST"] as Tz[]).map((z) => (
-                    <button
-                      key={z}
-                      type="button"
-                      onClick={() => setTz(z)}
-                      style={
-                        tz === z
-                          ? { backgroundColor: "#39c463", color: "#000", borderColor: "#39c463" }
-                          : {}
-                      }
-                      className={`border px-6 py-2 text-sm font-semibold transition-colors ${
-                        tz === z
-                          ? "border-transparent"
-                          : "border-border text-muted-foreground hover:text-foreground"
-                      }`}
-                    >
-                      {z}
-                    </button>
-                  ))}
-                </div>
+                <Label>Time range</Label>
+                <TimeRangePicker
+                  start={start}
+                  end={end}
+                  tz={tz}
+                  onChange={(nextStart, nextEnd, nextTz) => {
+                    setTz(nextTz);
+                    setPreset("custom");
+                    setCustomStart(epochToLocal(nextStart, nextTz));
+                    setCustomEnd(epochToLocal(nextEnd, nextTz));
+                  }}
+                />
               </div>
-              <div className="flex flex-wrap items-center gap-2 sm:col-span-2">
-                {PRESETS.map((p) => (
-                  <Button
-                    key={p.label}
-                    type="button"
-                    size="sm"
-                    variant={preset === p.seconds ? "primary" : "outline"}
-                    onClick={() => setPreset(p.seconds)}
-                  >
-                    {p.label}
-                  </Button>
-                ))}
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={preset === "custom" ? "primary" : "outline"}
-                  onClick={() => setPreset("custom")}
-                >
-                  Custom
-                </Button>
-              </div>
-              {preset === "custom" && (
-                <>
-                  <Field label={`Start (${tz})`}>
-                    <Input
-                      type="datetime-local"
-                      value={customStart}
-                      onChange={(e) => setCustomStart(e.target.value)}
-                    />
-                  </Field>
-                  <Field label={`End (${tz})`}>
-                    <Input
-                      type="datetime-local"
-                      value={customEnd}
-                      onChange={(e) => setCustomEnd(e.target.value)}
-                    />
-                  </Field>
-                </>
-              )}
               {recentRanges.length > 0 && (
                 <div className="sm:col-span-2">
                   <p className="mb-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70">
@@ -1567,6 +1553,7 @@ export default function NewJobPage() {
                     value={customer}
                     onChange={(e) => setCustomer(e.target.value)}
                     placeholder="ABSCBN"
+                    maxLength={12}
                     required
                   />
                   {!customer.trim() && hasSomethingToSave && (

@@ -54,6 +54,28 @@ def test_health_alert_config_rejects_out_of_range_thresholds(client):
     assert response.status_code == 422
 
 
+def test_disk_path_round_trips_and_must_be_absolute(client):
+    base = {
+        "enabled": True,
+        "cpu_threshold_pct": 70,
+        "memory_threshold_pct": 80,
+        "disk_threshold_pct": 90,
+        "cooldown_minutes": 15,
+        "slack": True,
+        "email": False,
+        "recipients": [],
+        "notify_on_recovery": True,
+        "disk_path": "/mnt/big",
+    }
+    saved = client.put("/settings/health-alerts", json=base)
+    assert saved.status_code == 200, saved.text
+    assert client.get("/settings/health-alerts").json()["disk_path"] == "/mnt/big"
+
+    response = client.put("/settings/health-alerts", json={**base, "disk_path": "relative/path"})
+    assert response.status_code == 422
+    assert "absolute" in response.json()["detail"]
+
+
 def test_email_channel_requires_a_recipient(client):
     response = client.put(
         "/settings/health-alerts",

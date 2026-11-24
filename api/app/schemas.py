@@ -408,6 +408,11 @@ class JobOut(BaseModel):
     completed_chunks: int
     current_chunk_start: int | None
     error_message: str | None
+    # Release 1 partial-completion reporting. Defaults keep older consumers and
+    # pre-P1 rows behaving exactly as before.
+    completion_state: str = "unknown"
+    gap_count: int = 0
+    gap_reason: str | None = None
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
@@ -510,6 +515,26 @@ class GroupCreate(BatchCreate):
     name: str = ""
 
 
+class GroupRerun(BaseModel):
+    """Re-run a group's searches under edited settings.
+
+    Every field is optional: an omitted one inherits the source group, so the
+    UI can send only what the operator changed. The searches themselves keep
+    the filter snapshot recorded in the original jobs — editing the filter is a
+    Saved search change, not a re-run of this run.
+    """
+
+    name: str | None = None
+    start_epoch: int | None = None
+    end_epoch: int | None = None
+    chunk_hours: int | None = None
+    id_batch_size: int | None = None
+    output_format: Literal["csv", "jsonl"] | None = None
+    is_preview: bool | None = None
+    # Subset of this group's jobs. Omitted = every search in the group.
+    job_ids: list[int] | None = None
+
+
 class GroupSummary(BaseModel):
     id: int
     name: str
@@ -518,6 +543,11 @@ class GroupSummary(BaseModel):
     created_at: datetime
     start_epoch: int
     end_epoch: int
+    # Run settings the group was launched with. Exposed so a re-run can be
+    # seeded from them rather than guessing from the first job.
+    chunk_hours: int
+    id_batch_size: int
+    output_format: str
     is_preview: bool
     parent_group_id: int | None = None
     total_jobs: int
@@ -621,6 +651,10 @@ class ScheduleCreate(BaseModel):
     aggregation: AggregationSpec | None = None
     customer: str = ""
     alert_recipients: list[str] = []
+    alert_on_row_drop: bool = False
+    row_drop_threshold_pct: int = Field(default=20, ge=1, le=100)
+    alert_on_unmatched: bool = False
+    unmatched_threshold: int = Field(default=100, ge=1)
     bq_config: BQConfig | None = None
     s3_profile_id: int | None = None
 
@@ -636,6 +670,10 @@ class ScheduleUpdate(BaseModel):
     exclude_exact_phrases: list[str] | None = None
     aggregation: AggregationSpec | None = None
     alert_recipients: list[str] | None = None
+    alert_on_row_drop: bool | None = None
+    row_drop_threshold_pct: int | None = Field(default=None, ge=1, le=100)
+    alert_on_unmatched: bool | None = None
+    unmatched_threshold: int | None = Field(default=None, ge=1)
     bq_config: BQConfig | None = None
     s3_profile_id: int | None = None
 
@@ -657,6 +695,10 @@ class ScheduleOut(BaseModel):
     output_format: str
     filter_spec: dict
     alert_recipients: list[str]
+    alert_on_row_drop: bool
+    row_drop_threshold_pct: int
+    alert_on_unmatched: bool
+    unmatched_threshold: int
     bq_config: BQConfig | None = None
     s3_profile_id: int | None = None
     s3_profile_label: str | None = None
@@ -690,6 +732,10 @@ class ScheduleExport(BaseModel):
     customer: str = ""
     aggregation: AggregationSpec | None = None
     alert_recipients: list[str] = []
+    alert_on_row_drop: bool = False
+    row_drop_threshold_pct: int = Field(default=20, ge=1, le=100)
+    alert_on_unmatched: bool = False
+    unmatched_threshold: int = Field(default=100, ge=1)
     bq_config: BQConfig | None = None
     s3_profile: S3ProfileRef | None = None
 
@@ -697,6 +743,7 @@ class ScheduleExport(BaseModel):
 class SettingsOut(BaseModel):
     environment: str
     default_org_slug: str
+    last9_api_base: str
     storage_dir: str
     export_retention_days: int
     download_url_ttl_seconds: int

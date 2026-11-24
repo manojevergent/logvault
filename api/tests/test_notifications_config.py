@@ -6,6 +6,7 @@ anything, so the form reported success and alerts kept using env vars only.
 
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from app import crypto, notifications
@@ -113,3 +114,69 @@ def test_failure_alert_passes_customer_to_email_and_slack(monkeypatch):
 
     notifications.send_failure_alert(["ops@evergent.com"], "Daily_aha", 42, "boom", "ACME")
     assert captured == {"email": "ACME", "slack": "ACME"}
+
+
+class _FakeResponse:
+    """Minimal stand-in for an httpx.Response, enough for raise_for_status()."""
+
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+        self.request = httpx.Request("POST", "https://hooks.slack.com/services/T/B/xyz")
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise httpx.HTTPStatusError(
+                f"Client error '{self.status_code}'",
+                request=self.request,
+                response=self,  # type: ignore[arg-type]
+            )
+
+
+def test_post_slack_raises_on_a_rejected_webhook(monkeypatch):
+    """A revoked webhook answers 404 as an ordinary response.
+
+    Without raise_for_status() that looked like a delivered message, so the
+    caller reported "sent" for a channel nobody was reading. This is the API
+    copy of the worker fix; the two must stay in step.
+    """
+    monkeypatch.setattr(notifications.httpx, "post", lambda *a, **k: _FakeResponse(404))
+
+    with pytest.raises(httpx.HTTPStatusError):
+        notifications._post_slack("https://hooks.slack.com/services/T/B/xyz", {"text": "hi"})
+
+
+def test_health_alert_reports_a_rejected_slack_webhook(monkeypatch):
+    """The failure must reach the per-channel result, not just the log."""
+    cfg = {**CFG, "slack_webhook_url": "https://hooks.slack.com/services/T/B/xyz"}
+    monkeypatch.setattr(notifications, "load_config", lambda: cfg)
+    monkeypatch.setattr(notifications, "_retry", lambda fn: fn())
+    monkeypatch.setattr(notifications.httpx, "post", lambda *a, **k: _FakeResponse(404))
+
+    result = notifications.send_health_alert(
+        subject="LogVault health",
+        body="disk 91%",
+        slack=True,
+        email=False,
+        recipients=[],
+    )
+
+    assert result["slack"]["attempted"] is True
+    assert result["slack"]["ok"] is False
+    assert "404" in result["slack"]["reason"]
+
+
+def test_health_alert_reports_a_delivered_slack_webhook(monkeypatch):
+    cfg = {**CFG, "slack_webhook_url": "https://hooks.slack.com/services/T/B/xyz"}
+    monkeypatch.setattr(notifications, "load_config", lambda: cfg)
+    monkeypatch.setattr(notifications, "_retry", lambda fn: fn())
+    monkeypatch.setattr(notifications.httpx, "post", lambda *a, **k: _FakeResponse(200))
+
+    result = notifications.send_health_alert(
+        subject="LogVault health",
+        body="all good",
+        slack=True,
+        email=False,
+        recipients=[],
+    )
+
+    assert result["slack"] == {"attempted": True, "ok": True, "reason": "sent"}

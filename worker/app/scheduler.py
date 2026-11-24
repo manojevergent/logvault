@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import contextlib
 import os
+import shutil
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 
 from sqlalchemy import func, select, text
 
-from app import db, s3
+from app import db, outbox, s3
 from app.celery_app import celery
 from app.config import get_settings
 from app.last9 import previous_calendar_day_window, store_path
@@ -171,22 +172,24 @@ def scan_schedules() -> list[int]:
                         f"Backfill for {day} — this schedule missed its run",
                         level="warn",
                     )
+                # Dispatch intent commits with the job, so a broker outage at this
+                # instant cannot lose the run. The beat dispatcher republishes
+                # anything still pending, which is why the delay() below is only a
+                # latency optimisation and its failure is harmless.
+                outbox.enqueue(conn, job_id)
                 created.append(job_id)
             conn.execute(
                 db.schedules.update().where(db.schedules.c.id == s["id"]).values(last_run_at=now)
             )
-    dispatched: list[int] = []
     for jid in created:
-        # Per job: one unreachable-broker failure must not strand the whole
-        # backfill. A job that fails to dispatch stays `queued` in the database
-        # with its window recorded, so it is still visible and re-runnable.
+        # Best effort only: the outbox row is the authority. A broker blip here
+        # leaves the row pending and the next dispatcher tick delivers it.
         try:
             run_job.delay(jid)
-            dispatched.append(jid)
         except Exception:  # noqa: BLE001 - broker errors are not worth typing out
             continue
     _beat()
-    return dispatched
+    return created
 
 
 @celery.task(name="logvault.reap_stale_jobs")
@@ -326,10 +329,11 @@ def cleanup_exports() -> int:
                 db.add_event(conn, j["id"], "Distinct-value store expired", level="warn")
                 removed += 1
 
-        # Low-disk-space emergency purge: if free disk drops below threshold, purge oldest exports
+        # Low-disk-space emergency purge: if free disk drops below threshold, purge oldest exports.
+        # shutil.disk_usage works on Windows as well as Linux; os.statvfs is POSIX-only and
+        # was silently skipped by the bare except on a dev Windows run.
         try:
-            stat = os.statvfs(settings.storage_dir)
-            free_gb = (stat.f_bavail * stat.f_frsize) / (1024**3)
+            free_gb = shutil.disk_usage(settings.storage_dir).free / (1024**3)
             if free_gb < settings.min_free_disk_gb:
                 oldest_jobs = (
                     conn.execute(

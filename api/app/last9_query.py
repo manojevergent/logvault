@@ -19,8 +19,7 @@ from typing import Any
 
 import httpx
 
-from app import crypto
-from app.config import get_settings
+from app import crypto, last9_config
 from app.last9_oauth import refresh_access_token
 from app.models import Last9Credential
 
@@ -60,8 +59,14 @@ class Last9QueryResult:
     elapsed_ms: int
 
 
-def access_token(db, cred: Last9Credential, *, force: bool = False) -> str:
-    """A valid access token, refreshing and persisting it when needed."""
+def access_token(
+    db, cred: Last9Credential, *, force: bool = False, api_base: str | None = None
+) -> str:
+    """A valid access token, refreshing and persisting it when needed.
+
+    The endpoint is resolved only when a refresh is actually needed, so a cached
+    token costs no settings read.
+    """
     if (
         not force
         and cred.encrypted_access_token
@@ -70,7 +75,10 @@ def access_token(db, cred: Last9Credential, *, force: bool = False) -> str:
     ):
         return crypto.decrypt(cred.encrypted_access_token)
 
-    result = refresh_access_token(crypto.decrypt(cred.encrypted_refresh_token))
+    result = refresh_access_token(
+        crypto.decrypt(cred.encrypted_refresh_token),
+        api_base=api_base or last9_config.api_base(db),
+    )
     cred.encrypted_access_token = crypto.encrypt(result["access_token"])
     cred.access_token_expires_at = result["expires_at"]
     if result.get("refresh_token"):
@@ -238,9 +246,10 @@ def query_last9(
     end_epoch: int,
     limit: int = 1000,
     timeout: float = 60.0,
+    api_base: str | None = None,
 ) -> Last9QueryResult:
-    settings = get_settings()
-    url = f"{settings.last9_api_base.rstrip('/')}/organizations/{org_slug}/logs/api/v2/query_range/json"
+    base = (api_base or last9_config.api_base()).rstrip("/")
+    url = f"{base}/organizations/{org_slug}/logs/api/v2/query_range/json"
     params: dict[str, Any] = {
         "start": start_epoch,
         "end": end_epoch,

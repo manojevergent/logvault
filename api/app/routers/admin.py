@@ -7,13 +7,15 @@ These endpoints are read-only views over the audit trail and env config.
 from __future__ import annotations
 
 import json
+from typing import Literal
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app import audit, notifications, tasks_client
+from app import audit, last9_config, notifications, tasks_client
 from app.config import get_settings
 from app.database import get_db
 from app.deps import require_admin
@@ -47,11 +49,15 @@ def list_audit(
 
 
 @router.get("/settings", response_model=SettingsOut)
-def settings_readout(_: User = Depends(require_admin)) -> SettingsOut:
+def settings_readout(
+    db: Session = Depends(get_db), _: User = Depends(require_admin)
+) -> SettingsOut:
     s = get_settings()
     return SettingsOut(
         environment=s.environment,
         default_org_slug=s.default_org_slug,
+        # Active endpoint, which may be the admin-saved BYOC URL rather than env.
+        last9_api_base=last9_config.api_base(db),
         storage_dir=s.storage_dir,
         export_retention_days=s.export_retention_days,
         download_url_ttl_seconds=s.download_url_ttl_seconds,
@@ -117,6 +123,105 @@ def update_notifications(
     return {"ok": True, "message": "Notification settings saved."}
 
 
+# --- Last9 endpoint ----------------------------------------------------------
+
+
+class Last9EndpointConfig(BaseModel):
+    api_base: str
+
+
+class Last9EndpointOut(BaseModel):
+    api_base: str
+    source: Literal["database", "env"]
+    default_api_base: str
+
+
+@router.get("/settings/last9", response_model=Last9EndpointOut)
+def get_last9_endpoint(
+    db: Session = Depends(get_db), _: User = Depends(require_admin)
+) -> Last9EndpointOut:
+    """The endpoint extraction and label lookups will actually use.
+
+    `source` says whether the saved value or the env fallback is in effect, so
+    the admin UI can show "using the default" without comparing strings.
+    """
+    cfg = last9_config.load_config(db)
+    return Last9EndpointOut(
+        api_base=cfg["api_base"],
+        source=cfg["source"],
+        default_api_base=last9_config.env_api_base(),
+    )
+
+
+@router.patch("/settings/last9", response_model=Last9EndpointOut)
+def update_last9_endpoint(
+    body: Last9EndpointConfig,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+) -> Last9EndpointOut:
+    """Persist a BYOC endpoint. Read at call time, so the next request/job uses
+    it without restarting the API or worker."""
+    try:
+        saved = last9_config.save_config(db, body.api_base, updated_by=user.email)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    audit.record(
+        db,
+        "update",
+        "settings",
+        None,
+        {"group": "last9", "api_base": saved},
+        user_id=user.email,
+    )
+    db.commit()
+    return Last9EndpointOut(
+        api_base=saved, source="database", default_api_base=last9_config.env_api_base()
+    )
+
+
+class Last9EndpointTest(BaseModel):
+    api_base: str
+
+
+@router.post("/settings/last9/test")
+def test_last9_endpoint(body: Last9EndpointTest, _: User = Depends(require_admin)) -> dict:
+    """Probe the URL without spending a credential.
+
+    The OAuth endpoint is the cheapest known path: a bogus refresh token comes
+    back 400/401/403/422 from a real Last9, while a wrong host fails at the
+    transport layer or answers with an HTML page. A 405 means the host is up but
+    the path is wrong — worth saying out loud, since BYOC gateways often mount
+    the API under a prefix.
+    """
+    try:
+        base = last9_config.normalize_api_base(body.api_base)
+    except ValueError as exc:
+        return {"ok": False, "status_code": None, "message": str(exc)}
+    try:
+        resp = httpx.post(
+            f"{base}/oauth/access_token", json={"refresh_token": "probe"}, timeout=8.0
+        )
+    except httpx.HTTPError as exc:
+        return {"ok": False, "status_code": None, "message": f"Unreachable: {exc}"}
+    if resp.status_code in (400, 401, 403, 422):
+        return {
+            "ok": True,
+            "status_code": resp.status_code,
+            "message": "Reachable — Last9 answered the OAuth endpoint.",
+        }
+    if resp.status_code == 405:
+        return {
+            "ok": True,
+            "status_code": 405,
+            "message": "Reachable, but the path does not accept POST — check the base URL.",
+        }
+    return {
+        "ok": False,
+        "status_code": resp.status_code,
+        "message": f"Unexpected HTTP {resp.status_code} from {base}/oauth/access_token",
+    }
+
+
 # --- system health alerts ----------------------------------------------------
 
 HEALTH_ALERTS_KEY = "health_alerts"
@@ -126,6 +231,8 @@ HEALTH_ALERT_DEFAULTS: dict[str, object] = {
     "cpu_threshold_pct": 85,
     "memory_threshold_pct": 85,
     "disk_threshold_pct": 85,
+    # Blank = the export volume, which is the one whose exhaustion breaks Postgres.
+    "disk_path": "",
     "cooldown_minutes": 30,
     "slack": True,
     "email": False,
@@ -139,6 +246,9 @@ class HealthAlertConfig(BaseModel):
     cpu_threshold_pct: float = 85
     memory_threshold_pct: float = 85
     disk_threshold_pct: float = 85
+    # Blank = the export volume. The worker falls back to it when this path does
+    # not exist, so a typo cannot point the alert at an empty directory.
+    disk_path: str = ""
     cooldown_minutes: int = 30
     slack: bool = True
     # Off until a recipient is configured - an on-but-empty channel would
@@ -149,8 +259,7 @@ class HealthAlertConfig(BaseModel):
 
 
 class HealthAlertConfigOut(HealthAlertConfig):
-    # Where the worker runs the sampler is the interesting path, not the API's.
-    disk_path: str | None = None
+    """Response shape. The path actually sampled is in ``/health/metrics``."""
 
 
 def _validate_health(body: HealthAlertConfig) -> None:
@@ -165,6 +274,11 @@ def _validate_health(body: HealthAlertConfig) -> None:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "cooldown_minutes must be between 1 and 1440",
+        )
+    if body.disk_path and not body.disk_path.startswith("/"):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "disk_path must be an absolute path (or blank for the export volume)",
         )
     if body.email and not body.recipients:
         raise HTTPException(
@@ -183,10 +297,9 @@ def get_health_alerts(
         **HEALTH_ALERT_DEFAULTS,
         **{k: v for k, v in saved.items() if k in HEALTH_ALERT_DEFAULTS},
     }
-    out = HealthAlertConfigOut(**merged)
-    sample = _health_sample()
-    out.disk_path = sample.get("disk_path") if sample else None
-    return out
+    # The configured value, so the admin form can round-trip it. The path the
+    # sampler actually used is in /health/metrics, which is what the meters show.
+    return HealthAlertConfigOut(**merged)
 
 
 @router.put("/settings/health-alerts")
@@ -198,6 +311,7 @@ def update_health_alerts(
     _validate_health(body)
     value = body.model_dump()
     value["recipients"] = [r.strip() for r in value["recipients"] if r and r.strip()]
+    value["disk_path"] = str(value.get("disk_path") or "").strip()
     row = db.get(AppSetting, HEALTH_ALERTS_KEY)
     if row is None:
         db.add(AppSetting(key=HEALTH_ALERTS_KEY, value=value, updated_by=user.email))

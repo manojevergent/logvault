@@ -17,6 +17,25 @@ export function epochToLocal(epoch: number, tz: Tz): string {
   return new Date(shifted).toISOString().slice(0, 16);
 }
 
+/**
+ * Round an epoch DOWN to the whole hour as seen in `tz`.
+ *
+ * Snapping has to happen in the display zone, not in raw epoch space: IST is
+ * UTC+5:30, so a whole UTC hour (00:00Z) is 05:30 IST — not a whole IST hour.
+ * Shifting into the zone first keeps "00:00" meaning 00:00 to the person who
+ * picked it.
+ */
+export function floorToHour(epoch: number, tz: Tz = "UTC"): number {
+  const shift = tz === "IST" ? IST_OFFSET_SEC : 0;
+  return Math.floor((epoch + shift) / 3600) * 3600 - shift;
+}
+
+/** Round an epoch UP to the whole hour as seen in `tz` (see `floorToHour`). */
+export function ceilToHour(epoch: number, tz: Tz = "UTC"): number {
+  const shift = tz === "IST" ? IST_OFFSET_SEC : 0;
+  return Math.ceil((epoch + shift) / 3600) * 3600 - shift;
+}
+
 /** Epoch seconds -> "YYYY-MM-DD HH:MM" in `tz`, for display. */
 export function formatEpoch(epoch: number, tz: Tz = "UTC"): string {
   const shifted = (epoch + (tz === "IST" ? IST_OFFSET_SEC : 0)) * 1000;

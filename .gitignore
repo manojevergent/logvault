@@ -33,8 +33,19 @@ build/
 *.csv
 celerybeat-schedule
 
+# Build logs and incremental caches
+build.log
+web-build.log
+*.tsbuildinfo
+
 # Editor / OS
 .DS_Store
 .idea/
 .vscode/
 *.swp
+
+# Database dumps stay out of the repo; keep them in backups/
+release-artifacts/**/*.dump
+
+# Local scratch (exports, one-off scripts)
+/tmp/

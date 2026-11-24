@@ -35,7 +35,12 @@ INDEX_PREFIX = "physical_index"
 
 # §2.3 — default query params.
 DEFAULT_LIMIT = 10000
-DEFAULT_DIRECTION = "backward"
+# Files are consumed top-down (Excel, grep, a diff), so rows must be written
+# oldest-first. Backward made each chunk land newest-first: the first line of a
+# day was 00:59:59 and the 00:00 rows sat further down the file, which reads as
+# a missing first hour. Chunks already run start -> end, so forward also makes
+# the whole file globally ascending.
+DEFAULT_DIRECTION = "forward"
 DEFAULT_STEP = "200ms"
 
 # §2.6 — safe batch size: ~100 IDs per regex => ~5 KB requests.

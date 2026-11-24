@@ -14,20 +14,24 @@ from datetime import datetime
 
 import httpx
 
-from app.config import get_settings
+from app import last9_config
 
 _ASSUMED_LIFETIME = 24 * 3600
 _EXPIRING_WINDOW = 3600  # within 1h of expiry => "expiring"
 
 
-def refresh_access_token(refresh_token: str) -> dict:
+def refresh_access_token(refresh_token: str, api_base: str | None = None) -> dict:
     """POST the refresh token; return {access_token, expires_at, refresh_token?}.
+
+    `api_base` defaults to the active endpoint (admin setting, else the env
+    fallback). Callers that already resolved it pass it in to avoid a second
+    settings read.
 
     Raises httpx.HTTPError on transport failure, ValueError on a non-200 or a
     response missing access_token.
     """
-    settings = get_settings()
-    url = f"{settings.last9_api_base.rstrip('/')}/oauth/access_token"
+    base = (api_base or last9_config.api_base()).rstrip("/")
+    url = f"{base}/oauth/access_token"
     resp = httpx.post(url, json={"refresh_token": refresh_token}, timeout=15.0)
     if resp.status_code != 200:
         raise ValueError(f"Last9 returned HTTP {resp.status_code}")

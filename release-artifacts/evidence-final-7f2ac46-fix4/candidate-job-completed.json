@@ -1,0 +1,150 @@
+﻿{
+    "id":  1,
+    "group_id":  null,
+    "status":  "completed",
+    "region_code":  "ap-southeast-1",
+    "index_target_id":  1,
+    "credential_id":  9,
+    "start_epoch":  1794751115,
+    "end_epoch":  1794754715,
+    "chunk_hours":  1,
+    "id_batch_size":  100,
+    "filter_spec":  {
+                        "phrases":  [
+                                        "\u003cchannelPartnerID\u003eLIGHTBOX\u003c/channelPartnerID\u003e"
+                                    ],
+                        "ids":  [
+
+                                ],
+                        "exact_phrases":  [
+
+                                          ],
+                        "exclude_phrases":  [
+
+                                            ],
+                        "exclude_exact_phrases":  [
+
+                                                  ],
+                        "message_types":  [
+                                              "sessionToken"
+                                          ],
+                        "label":  "acceptance-20261115145835",
+                        "customer":  "ACCEPTANCE"
+                    },
+    "rows_written":  6923,
+    "total_chunks":  1,
+    "completed_chunks":  1,
+    "current_chunk_start":  1794751115,
+    "error_message":  null,
+    "completion_state":  "complete",
+    "gap_count":  0,
+    "gap_reason":  null,
+    "created_at":  "2026-11-15T14:58:35.508830Z",
+    "started_at":  "2026-11-15T14:58:35.659044Z",
+    "finished_at":  "2026-11-15T14:58:39.092955Z",
+    "output_format":  "csv",
+    "is_preview":  false,
+    "preview":  [
+                    {
+                        "timestamp":  "2026-11-15 14:58:26:376 UTC",
+                        "message":  "1-6af9b87e-28a67a7f3d4926327b170a8e - getActiveSubscriptionsPostAction -- data comes from request:\u003cGetActiveSubscriptionRequestMessage\u003e\u003creturnTVOD\u003eF\u003c/returnTVOD\u003e\u003cchannelPartnerID\u003eLIGHTBOX\u003c/channelPartnerID\u003e\u003csessionToken\u003es52p-uLiG-bPye-UrN4-XfAt-Du2W-gW\u003c/sessionToken\u003eapiPassword=\"***REDACTED***\"\u003capiUser\u003elightboxapiuser\u003c/apiUser\u003e\u003c/GetActiveSubscriptionRequestMessage\u003e"
+                    },
+                    {
+                        "timestamp":  "2026-11-15 14:58:24:072 UTC",
+                        "message":  "1-6af9c88c-2d6df21c05c3d24e40e3022e - getAccountDevicesPostAction -- data comes from request:\u003cGetAccountDevicesRequestMessage\u003e\u003cchannelPartnerID\u003eLIGHTBOX\u003c/channelPartnerID\u003e\u003csessionToken\u003eDQKy-LrS8-e5Px-GqUx-G50U-imMT-Qj\u003c/sessionToken\u003eapiPassword=\"***REDACTED***\"\u003capiUser\u003elightboxapiuser\u003c/apiUser\u003e\u003c/GetAccountDevicesRequestMessage\u003e"
+                    },
+                    {
+                        "timestamp":  "2026-11-15 14:58:24:071 UTC",
+                        "message":  "1-6af9c886-6c97d2c3583bbdbb20b93b39 - getActiveSubscriptionsPostAction -- data comes from request:\u003cGetActiveSubscriptionRequestMessage\u003e\u003creturnTVOD\u003eF\u003c/returnTVOD\u003e\u003cchannelPartnerID\u003eLIGHTBOX\u003c/channelPartnerID\u003e\u003csessionToken\u003ejTg6-TKrS-qxrZ-Ij9p-HBpI-Sjq6-Iv\u003c/sessionToken\u003eapiPassword=\"***REDACTED***\"\u003capiUser\u003elightboxapiuser\u003c/apiUser\u003e\u003c/GetActiveSubscriptionRequestMessage\u003e"
+                    },
+                    {
+                        "timestamp":  "2026-11-15 14:58:17:530 UTC",
+                        "message":  "1-6af9b882-585c258219eb04b161893bd0 - getContactPostAction -- data comes from request:\u003cGetContactRequestMessage\u003e\u003cchannelPartnerID\u003eLIGHTBOX\u003c/channelPartnerID\u003e\u003csessionToken\u003ePKDM-qQRF-B4Gm-ujQc-6yBp-ITcN-QA\u003c/sessionToken\u003eapiPassword=\"***REDACTED***\"\u003capiUser\u003elightboxapiuser\u003c/apiUser\u003e\u003c/GetContactRequestMessage\u003e"
+                    },
+                    {
+                        "timestamp":  "2026-11-15 14:58:15:873 UTC",
+                        "message":  "1-6af9b25c-28ed3e9a449317ee03c6f600 - getSubscriptionHistoryPostAction -- data comes from request:\u003cGetSubscriptionHistoryRequestMessage\u003e\u003cchannelPartnerID\u003eLIGHTBOX\u003c/channelPartnerID\u003e\u003csessionToken\u003eLsDg-4uiW-2ulR-smIn-UwFg-9FFY-GZ\u003c/sessionToken\u003eapiPassword=\"***REDACTED***\"\u003cinvoluntarySuspend\u003etrue\u003c/involuntarySuspend\u003e\u003capiUser\u003elightboxapiuser\u003c/apiUser\u003e\u003c/GetSubscriptionHistoryRequestMessage\u003e"
+                    },
+                    {
+                        "timestamp":  "2026-11-15 14:58:15:411 UTC",
+                        "message":  "1-6af9c881-26d2806b0d27f28b240d03c4 - getAccountDevicesPostAction -- data comes from request:\u003cGetAccountDevicesRequestMessage\u003e\u003cchannelPartnerID\u003eLIGHTBOX\u003c/channelPartnerID\u003e\u003csessionToken\u003eL1Cm-yvIk-6D9O-2CiU-jB6F-NmaW-ot\u003c/sessionToken\u003eapiPassword=\"***REDACTED***\"\u003capiUser\u003elightboxapiuser\u003c/apiUser\u003e\u003c/GetAccountDevicesRequestMessage\u003e"
+                    },
+                    {
+                        "timestamp":  "2026-11-15 14:58:13:718 UTC",
+                        "message":  "1-6af9c87d-083872ff2697f4be5e927ce1 - getActiveSubscriptionsPostAction -- data comes from request:\u003cGetActiveSubscriptionRequestMessage\u003e\u003creturnTVOD\u003eF\u003c/returnTVOD\u003e\u003cchannelPartnerID\u003eLIGHTBOX\u003c/channelPartnerID\u003e\u003csessionToken\u003ewt0W-EusM-EfYb-1uQ4-7DRA-xX0p-7v\u003c/sessionToken\u003eapiPassword=\"***REDACTED***\"\u003capiUser\u003elightboxapiuser\u003c/apiUser\u003e\u003c/GetActiveSubscriptionRequestMessage\u003e"
+                    },
+                    {
+                        "timestamp":  "2026-11-15 14:58:12:218 UTC",
+                        "message":  "1-6af9b250-6b2a6b425cb342a04ce6e9b1 - getOrderDetailsPostAction -- data comes from request:\u003cGetOrderDetailsRequest\u003e\u003corderID\u003e*****\u003c/orderID\u003e\u003cchannelPartnerID\u003eLIGHTBOX\u003c/channelPartnerID\u003e\u003csessionToken\u003eMtNF-lZKO-N2ai-HjBq-BJNt-pUWn-mG\u003c/sessionToken\u003eapiPassword=\"***REDACTED***\"\u003capiUser\u003elightboxapiuser\u003c/apiUser\u003e\u003c/GetOrderDetailsRequest\u003e"
+                    },
+                    {
+                        "timestamp":  "2026-11-15 14:58:11:425 UTC",
+                        "message":  "1-6af9c87e-43997e48539846fb1ab45eea - getOrderDetailsPostAction -- data comes from request:\u003cGetOrderDetailsRequest\u003e\u003corderID\u003e*****\u003c/orderID\u003e\u003cchannelPartnerID\u003eLIGHTBOX\u003c/channelPartnerID\u003e\u003csessionToken\u003ewt0W-EusM-EfYb-1uQ4-7DRA-xX0p-7v\u003c/sessionToken\u003eapiPassword=\"***REDACTED***\"\u003capiUser\u003elightboxapiuser\u003c/apiUser\u003e\u003c/GetOrderDetailsRequest\u003e"
+                    },
+                    {
+                        "timestamp":  "2026-11-15 14:58:11:175 UTC",
+                        "message":  "1-6af9c87b-564907ec1193c4684cd1d333 - getContactPostAction -- data comes from request:\u003cGetContactRequestMessage\u003e\u003cchannelPartnerID\u003eLIGHTBOX\u003c/channelPartnerID\u003e\u003csessionToken\u003ejCTY-Nt2Z-2YMK-LwR5-ZRjv-JxEY-Zv\u003c/sessionToken\u003eapiPassword=\"***REDACTED***\"\u003capiUser\u003elightboxapiuser\u003c/apiUser\u003e\u003c/GetContactRequestMessage\u003e"
+                    },
+                    {
+                        "timestamp":  "2026-11-15 14:58:10:268 UTC",
+                        "message":  "1-6af9c87d-36f2611264dc77413c4d80e7 - getActiveSubscriptionsPostAction -- data comes from request:\u003cGetActiveSubscriptionRequestMessage\u003e\u003creturnTVOD\u003eT\u003c/returnTVOD\u003e\u003cchannelPartnerID\u003eLIGHTBOX\u003c/channelPartnerID\u003e\u003csessionToken\u003ewt0W-EusM-EfYb-1uQ4-7DRA-xX0p-7v\u003c/sessionToken\u003eapiPassword=\"***REDACTED***\"\u003capiUser\u003elightboxapiuser\u003c/apiUser\u003e\u003c/GetActiveSubscriptionRequestMessage\u003e"
+                    },
+                    {
+                        "timestamp":  "2026-11-15 14:58:10:256 UTC",
+                        "message":  "1-6af9bc2e-1cd2d1b45dd7911b41db2cc0 - getActiveSubscriptionsPostAction -- data comes from request:\u003cGetActiveSubscriptionRequestMessage\u003e\u003creturnTVOD\u003eF\u003c/returnTVOD\u003e\u003cchannelPartnerID\u003eLIGHTBOX\u003c/channelPartnerID\u003e\u003csessionToken\u003eScNo-IJP4-6i9I-rNhh-Ohjt-3BaD-1w\u003c/sessionToken\u003eapiPassword=\"***REDACTED***\"\u003capiUser\u003elightboxapiuser\u003c/apiUser\u003e\u003c/GetActiveSubscriptionRequestMessage\u003e"
+                    },
+                    {
+                        "timestamp":  "2026-11-15 14:58:10:256 UTC",
+                        "message":  "1-6af9bc25-0761995454279e912d40d470 - getSubscriptionHistoryPostAction -- data comes from request:\u003cGetSubscriptionHistoryRequestMessage\u003e\u003cchannelPartnerID\u003eLIGHTBOX\u003c/channelPartnerID\u003e\u003csessionToken\u003eV6Fo-PCEM-5QC9-HPpe-I1LN-VyGC-UW\u003c/sessionToken\u003eapiPassword=\"***REDACTED***\"\u003cinvoluntarySuspend\u003etrue\u003c/involuntarySuspend\u003e\u003capiUser\u003elightboxapiuser\u003c/apiUser\u003e\u003c/GetSubscriptionHistoryRequestMessage\u003e"
+                    },
+                    {
+                        "timestamp":  "2026-11-15 14:58:10:237 UTC",
+                        "message":  "1-6af9c87d-72cba79524234bef327d3910 - getSubscriptionHistoryPostAction -- data comes from request:\u003cGetSubscriptionHistoryRequestMessage\u003e\u003cchannelPartnerID\u003eLIGHTBOX\u003c/channelPartnerID\u003e\u003csessionToken\u003ewt0W-EusM-EfYb-1uQ4-7DRA-xX0p-7v\u003c/sessionToken\u003eapiPassword=\"***REDACTED***\"\u003cinvoluntarySuspend\u003etrue\u003c/involuntarySuspend\u003e\u003capiUser\u003elightboxapiuser\u003c/apiUser\u003e\u003c/GetSubscriptionHistoryRequestMessage\u003e"
+                    },
+                    {
+                        "timestamp":  "2026-11-15 14:58:09:661 UTC",
+                        "message":  "1-6af9c87b-3996c50d4edafc9e3e604fdb - getPaymentsPostAction -- data comes from request:\u003cGetPaymentsRequestMessage\u003e\u003cchannelPartnerID\u003eLIGHTBOX\u003c/channelPartnerID\u003e\u003csessionToken\u003ejCTY-Nt2Z-2YMK-LwR5-ZRjv-JxEY-Zv\u003c/sessionToken\u003eapiPassword=\"***REDACTED***\"\u003capiUser\u003elightboxapiuser\u003c/apiUser\u003e\u003c/GetPaymentsRequestMessage\u003e"
+                    },
+                    {
+                        "timestamp":  "2026-11-15 14:58:09:034 UTC",
+                        "message":  "1-6af9c87d-1ab124607673d127384211cf - getPaymentsPostAction -- data comes from request:\u003cGetPaymentsRequestMessage\u003e\u003cchannelPartnerID\u003eLIGHTBOX\u003c/channelPartnerID\u003e\u003csessionToken\u003ewt0W-EusM-EfYb-1uQ4-7DRA-xX0p-7v\u003c/sessionToken\u003eapiPassword=\"***REDACTED***\"\u003capiUser\u003elightboxapiuser\u003c/apiUser\u003e\u003c/GetPaymentsRequestMessage\u003e"
+                    },
+                    {
+                        "timestamp":  "2026-11-15 14:58:08:880 UTC",
+                        "message":  "1-6af9c87b-7442c1d3072b83900a942ed3 - getPaymentMethodsPostAction -- data comes from request:\u003cGetPaymentMethodsRequestMessage\u003e\u003cchannelPartnerID\u003eLIGHTBOX\u003c/channelPartnerID\u003e\u003csessionToken\u003ejCTY-Nt2Z-2YMK-LwR5-ZRjv-JxEY-Zv\u003c/sessionToken\u003eapiPassword=\"***REDACTED***\"\u003capiUser\u003elightboxapiuser\u003c/apiUser\u003e\u003c/GetPaymentMethodsRequestMessage\u003e"
+                    },
+                    {
+                        "timestamp":  "2026-11-15 14:58:08:867 UTC",
+                        "message":  "1-6af9c87b-0f662a47428b5b10441a3a9b - getOrderDetailsPostAction -- data comes from request:\u003cGetOrderDetailsRequest\u003e\u003corderID\u003e*****\u003c/orderID\u003e\u003cchannelPartnerID\u003eLIGHTBOX\u003c/channelPartnerID\u003e\u003csessionToken\u003ejCTY-Nt2Z-2YMK-LwR5-ZRjv-JxEY-Zv\u003c/sessionToken\u003eapiPassword=\"***REDACTED***\"\u003capiUser\u003elightboxapiuser\u003c/apiUser\u003e\u003c/GetOrderDetailsRequest\u003e"
+                    },
+                    {
+                        "timestamp":  "2026-11-15 14:58:08:626 UTC",
+                        "message":  "1-6af9c87d-34948d80291962fc230a8559 - getOrderDetailsPostAction -- data comes from request:\u003cGetOrderDetailsRequest\u003e\u003corderID\u003e*****\u003c/orderID\u003e\u003cchannelPartnerID\u003eLIGHTBOX\u003c/channelPartnerID\u003e\u003csessionToken\u003ewt0W-EusM-EfYb-1uQ4-7DRA-xX0p-7v\u003c/sessionToken\u003eapiPassword=\"***REDACTED***\"\u003capiUser\u003elightboxapiuser\u003c/apiUser\u003e\u003c/GetOrderDetailsRequest\u003e"
+                    },
+                    {
+                        "timestamp":  "2026-11-15 14:58:08:484 UTC",
+                        "message":  "1-6af9c87b-2862e22b3804cb643c98e411 - getOrderDetailsPostAction -- data comes from request:\u003cGetOrderDetailsRequest\u003e\u003corderID\u003e*****\u003c/orderID\u003e\u003cchannelPartnerID\u003eLIGHTBOX\u003c/channelPartnerID\u003e\u003csessionToken\u003ejCTY-Nt2Z-2YMK-LwR5-ZRjv-JxEY-Zv\u003c/sessionToken\u003eapiPassword=\"***REDACTED***\"\u003capiUser\u003elightboxapiuser\u003c/apiUser\u003e\u003c/GetOrderDetailsRequest\u003e"
+                    }
+                ],
+    "aggregation_result":  null,
+    "has_output":  true,
+    "download_url":  "/jobs/1/download?exp=1795359521\u0026sig=8b41b74097368a75966d8038700360b23cb0b36221b3ded602092240330f481a",
+    "progress_url":  "/jobs/1/progress?exp=1794797921\u0026sig=387e2a8b96063e096271d6e80cbf9464909fd13c0ce92621a7b7d187f75c9617",
+    "credential_label":  "Singapore",
+    "output_size_bytes":  325987,
+    "created_by":  "acceptance@example.local",
+    "rollup_of":  null,
+    "has_summary":  false,
+    "summary_url":  null,
+    "has_counts":  false,
+    "counts_url":  null,
+    "has_unmatched":  false,
+    "unmatched_url":  null,
+    "s3_profile_id":  null,
+    "s3_destination":  null,
+    "s3_uri":  null,
+    "s3_summary_uri":  null,
+    "s3_counts_uri":  null,
+    "s3_error":  null,
+    "s3_uploaded_at":  null
+}

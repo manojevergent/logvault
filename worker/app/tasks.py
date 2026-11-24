@@ -12,6 +12,7 @@ import shutil
 from datetime import UTC, datetime
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from app.celery_app import celery
 from app.config import get_settings
@@ -64,6 +65,18 @@ def _as_dict(value: object) -> dict:
     return {}
 
 
+def _as_list(value: object) -> list[str]:
+    """JSON list column from a raw SELECT, whichever driver decoded it."""
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str) and value:
+        with contextlib.suppress(Exception):
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+    return []
+
+
 def _send_alert_if_scheduled(conn, job: dict, error_message: str) -> None:
     """Send alert if this job is from a schedule."""
     # `or ""` rather than a .get default: created_by is NULL for every job
@@ -88,14 +101,15 @@ def _send_alert_if_scheduled(conn, job: dict, error_message: str) -> None:
             .mappings()
             .first()
         )
-        if result and result["alert_recipients"]:
+        recipients = _as_list(result.get("alert_recipients")) if result else []
+        if result and recipients:
             spec = _as_dict(result.get("filter_spec"))
             customer = str(spec.get("customer") or "").strip()
             if not customer:
                 job_spec = _as_dict(job.get("filter_spec"))
                 customer = str(job_spec.get("customer") or "").strip()
             send_failure_alert(
-                result["alert_recipients"],
+                recipients,
                 result["name"],
                 job["id"],
                 error_message,
@@ -107,6 +121,188 @@ def _send_alert_if_scheduled(conn, job: dict, error_message: str) -> None:
 
         log = get_logger("logvault.worker.tasks")
         log.exception("alert.error", exc_info=exc)
+
+
+def _send_schedule_anomaly_if_needed(job_id: int) -> None:
+    """Evaluate and send the per-schedule anomaly alerts after completion.
+
+    The event marker makes this idempotent across Celery redeliveries. The
+    notification itself runs after the transaction so a slow SMTP server cannot
+    hold a database transaction open.
+    """
+    from app import db
+    from app.notifications import send_anomaly_alert
+    from app.schedule_alerts import evaluate_anomaly
+
+    send_payload: dict | None = None
+    try:
+        with db.engine().begin() as conn:
+            job = db.load(conn, db.jobs, job_id)
+            if not job or job.get("status") != "completed":
+                return
+            created_by = str(job.get("created_by") or "")
+            if not created_by.startswith("schedule:"):
+                return
+            schedule_id = int(created_by.split(":", 1)[1])
+            sched = (
+                conn.execute(
+                    text(
+                        "SELECT id, name, alert_recipients, alert_on_row_drop, "
+                        "row_drop_threshold_pct, alert_on_unmatched, unmatched_threshold, "
+                        "filter_spec FROM schedules WHERE id = :id"
+                    ),
+                    {"id": schedule_id},
+                )
+                .mappings()
+                .first()
+            )
+            if not sched:
+                return
+
+            already = conn.execute(
+                text(
+                    "SELECT 1 FROM job_events "
+                    "WHERE job_id = :id AND message LIKE 'Anomaly detected%' LIMIT 1"
+                ),
+                {"id": job_id},
+            ).first()
+            if already:
+                return
+
+            agg = _as_dict(job.get("aggregation_result"))
+            current_rows = int(job.get("rows_written") or 0)
+            # A partial run lost chunks, so its row count is not comparable with a
+            # complete run: alerting "rows dropped" on it would page someone about a
+            # run that failed to finish rather than about a quiet source. The job's
+            # own partial-completion event already says the extraction was short.
+            run_complete = str(job.get("completion_state") or "unknown") != "partial"
+            previous_rows = conn.execute(
+                text(
+                    "SELECT rows_written FROM jobs "
+                    "WHERE created_by = :owner AND status = 'completed' "
+                    "AND id <> :id AND start_epoch < :start AND rows_written > 0 "
+                    # A partial run under-counts, so using it as the baseline would
+                    # mask the next real drop. 'unknown' predates the column and is
+                    # treated as usable, 'partial' is not.
+                    "AND coalesce(completion_state, 'unknown') <> 'partial' "
+                    "ORDER BY start_epoch DESC, id DESC LIMIT 1"
+                ),
+                {
+                    "owner": created_by,
+                    "id": job_id,
+                    "start": int(job.get("start_epoch") or 0),
+                },
+            ).scalar()
+
+            evaluation = evaluate_anomaly(
+                current_rows=current_rows,
+                previous_rows=previous_rows,
+                rows_matched=agg.get("rows_matched"),
+                rows_unmatched=agg.get("rows_unmatched"),
+                alert_on_row_drop=bool(sched.get("alert_on_row_drop")) and run_complete,
+                row_drop_threshold_pct=int(sched.get("row_drop_threshold_pct") or 20),
+                alert_on_unmatched=bool(sched.get("alert_on_unmatched")),
+                unmatched_threshold=int(sched.get("unmatched_threshold") or 100),
+            )
+            if not evaluation.reasons:
+                return
+
+            # A partial unique index allows only one anomaly marker per job. Two
+            # concurrent deliveries can both pass the SELECT above, so the
+            # insert is the real arbiter: a savepoint keeps the outer
+            # transaction usable when the other delivery won the race.
+            try:
+                with conn.begin_nested():
+                    db.add_event(
+                        conn,
+                        job_id,
+                        "Anomaly detected: " + "; ".join(evaluation.reasons),
+                        level="warn",
+                    )
+            except IntegrityError:
+                # The other delivery owns the notification. Sending here would
+                # page the team twice for one anomaly.
+                return
+            spec = _as_dict(sched.get("filter_spec"))
+            customer = str(spec.get("customer") or "").strip()
+            if not customer:
+                customer = str(_as_dict(job.get("filter_spec")).get("customer") or "").strip()
+            send_payload = {
+                "recipients": _as_list(sched.get("alert_recipients")),
+                "schedule_name": sched["name"],
+                "job_id": job_id,
+                "customer": customer,
+                "reasons": evaluation.reasons,
+                "current_rows": evaluation.current_rows,
+                "previous_rows": evaluation.previous_rows,
+                "drop_pct": evaluation.drop_pct,
+                "rows_unmatched": evaluation.rows_unmatched,
+                "parsed_rows": evaluation.parsed_rows,
+                "unmatched_pct": evaluation.unmatched_pct,
+                "row_drop_threshold_pct": int(sched.get("row_drop_threshold_pct") or 20),
+                "unmatched_threshold": int(sched.get("unmatched_threshold") or 100),
+            }
+    except Exception as exc:
+        # Alerting must never change the outcome of an already completed job.
+        from app.logging_config import get_logger
+
+        get_logger("logvault.worker.tasks").exception("schedule_anomaly.error", exc_info=exc)
+        return
+
+    if send_payload is not None:
+        try:
+            delivery = send_anomaly_alert(**send_payload)
+        except Exception as exc:
+            from app.logging_config import get_logger
+
+            get_logger("logvault.worker.tasks").exception(
+                "schedule_anomaly.send_failed", exc_info=exc
+            )
+            delivery = {"error": {"attempted": True, "ok": False, "reason": str(exc)[:300]}}
+        _record_anomaly_delivery(job_id, delivery)
+
+
+def _record_anomaly_delivery(job_id: int, delivery: object) -> None:
+    """Write down a failed or skipped anomaly delivery.
+
+    The "Anomaly detected" marker is committed before the send, so a channel
+    failure leaves a job that reads as alerted while nobody was told. This event
+    is the only place that difference becomes visible. ``None`` means the sender
+    returned nothing (an older build), so there is nothing to judge and nothing
+    is written.
+    """
+    if not isinstance(delivery, dict):
+        return
+
+    channels = {
+        name: result
+        for name, result in delivery.items()
+        if isinstance(result, dict) and result.get("attempted")
+    }
+    failed = {name: result for name, result in channels.items() if not result.get("ok")}
+    if channels and not failed:
+        return
+
+    if failed:
+        message = "Anomaly alert not delivered: " + "; ".join(
+            f"{name}: {result.get('reason') or 'unknown error'}" for name, result in failed.items()
+        )
+    else:
+        message = (
+            "Anomaly alert not delivered: no channel configured (no recipients, no Slack webhook)"
+        )
+
+    from app import db
+
+    try:
+        with db.engine().begin() as conn:
+            db.add_event(conn, job_id, message, level="warn")
+    except Exception as exc:  # noqa: BLE001 - the alert path must not fail the job
+        from app.logging_config import get_logger
+
+        get_logger("logvault.worker.tasks").exception(
+            "schedule_anomaly.delivery_event_failed", exc_info=exc
+        )
 
 
 def _mark_failed(db, job_id: int, exc: BaseException) -> None:
@@ -121,9 +317,11 @@ def _mark_failed(db, job_id: int, exc: BaseException) -> None:
     # suppress is best-effort by design: if this fails too (DB down), there is
     # nothing further to try, and the original exception still reaches Celery.
     with contextlib.suppress(Exception), db.engine().begin() as conn:
-        # Only claim jobs the runner never got to. A job it already moved to
-        # paused/canceled/failed/completed has a better story than this one.
-        if db.current_status(conn, job_id) in ("queued", "running"):
+        # Only jobs the runner never got to. "running" is deliberately excluded:
+        # a live worker owns that row, and a failed duplicate delivery used to be
+        # able to mark a healthy job failed. Stale running rows are the
+        # reconciler's job, not this fallback's.
+        if db.current_status(conn, job_id) == "queued":
             job = db.load(conn, db.jobs, job_id)
             db.update_job(
                 conn,
@@ -172,6 +370,7 @@ def run_job(job_id: int) -> None:
             run_rollup(job_id)
         else:
             run_extraction(job_id, reclaim=redelivered)
+        _send_schedule_anomaly_if_needed(job_id)
     except Exception as exc:
         _mark_failed(db, job_id, exc)
         raise  # let Celery record the task failure too

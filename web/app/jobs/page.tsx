@@ -18,6 +18,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import * as React from "react";
 import { ImportJsonButton } from "@/components/import-json-button";
 import { Badge } from "@/components/ui/badge";
+import { completionOf, jobProgress } from "@/lib/completion";
 import { Button } from "@/components/ui/button";
 import {
   API_BASE,
@@ -64,6 +65,14 @@ function extractionName(job: Job): string | null {
   const label = job.filter_spec?.label;
   if (!label) return null;
   return label.replace(/^INVOICE_/, "");
+}
+
+/** Colour the percentage text by the row's status; no bar, no extra width. */
+function progressTextTone(status: JobStatus): string {
+  if (status === "completed") return "text-success";
+  if (status === "failed") return "text-danger";
+  if (status === "paused" || status === "canceled") return "text-warning";
+  return "text-muted-foreground";
 }
 
 export default function JobsPage() {
@@ -526,7 +535,7 @@ function JobsPageContent() {
 
       {filtered && filtered.length > 0 && (
         <>
-          <div className="border border-border">
+          <div className="overflow-x-auto border border-border">
             <table className="w-full text-sm">
               <thead className="sticky top-0 z-10 bg-surface text-xs uppercase tracking-wide text-muted-foreground shadow-[inset_0_-1px_0_hsl(var(--border))]">
                 <tr>
@@ -541,6 +550,12 @@ function JobsPageContent() {
                     />
                   </th>
                   <th className="whitespace-nowrap px-2 py-1 text-left font-medium">Status</th>
+                  <th
+                    className="whitespace-nowrap px-2 py-1 text-right font-medium"
+                    title="Chunks completed out of the total the worker planned"
+                  >
+                    Progress
+                  </th>
                   <th className="whitespace-nowrap px-2 py-1 text-left font-medium">Extraction</th>
                   <th className="whitespace-nowrap px-2 py-1 text-left font-medium">Customer</th>
                   <th className="whitespace-nowrap px-2 py-1 text-left font-medium">
@@ -658,6 +673,16 @@ const JobRow = React.memo(function JobRow({
       qc.invalidateQueries({ queryKey: ["jobs"] });
     },
   });
+  const completion = completionOf(job);
+  const pct = jobProgress(job);
+  const progressTitle =
+    job.status === "completed"
+      ? "Completed"
+      : job.total_chunks > 0
+        ? `${job.completed_chunks.toLocaleString()} of ${job.total_chunks.toLocaleString()} chunks completed`
+        : job.status === "running"
+          ? "Running — waiting for the first chunk"
+          : "No chunks completed yet";
   return (
     <tr className={`hover:bg-accent/40 ${selected ? "bg-accent/30" : ""}`}>
       <td className="px-2 py-0.5">
@@ -679,7 +704,18 @@ const JobRow = React.memo(function JobRow({
             <span className="h-1.5 w-1.5 rounded-full bg-blue-400 animate-pulse" aria-hidden />
           )}
           <Badge tone={JOB_TONE[job.status]}>{job.status}</Badge>
+          {completion.isPartial && (
+            <Badge tone="warning" title={completion.detail ?? undefined}>
+              {completion.label}
+            </Badge>
+          )}
         </div>
+      </td>
+      <td
+        className={`whitespace-nowrap px-2 py-0.5 text-right font-mono text-[11px] tabular-nums ${progressTextTone(job.status)}`}
+        title={progressTitle}
+      >
+        {pct}%
       </td>
       <td
         className="max-w-[22rem] truncate px-2 py-0.5 text-xs"
@@ -688,8 +724,8 @@ const JobRow = React.memo(function JobRow({
         {extractionName(job) ?? <span className="opacity-40">—</span>}
       </td>
       <td
-        className="max-w-[12rem] truncate px-2 py-0.5 text-xs"
-        title={`Region ${job.region_code}`}
+        className="w-[12ch] max-w-[12ch] truncate px-2 py-0.5 text-xs"
+        title={job.filter_spec?.customer ?? undefined}
       >
         {job.filter_spec?.customer?.trim() ? (
           job.filter_spec.customer
@@ -705,13 +741,9 @@ const JobRow = React.memo(function JobRow({
       </td>
       <td
         className="whitespace-nowrap px-2 py-0.5 font-mono text-xs text-muted-foreground"
-        title={`Submitted ${formatEpoch(submitted / 1000, tz)} ${tz}${
-          ran != null ? ` · ran ${formatDuration(ran)}` : ""
-        }`}
+        title={`Submitted ${formatEpoch(submitted / 1000, tz)} ${tz}`}
       >
-        {ran != null
-          ? `ran ${formatDuration(ran)}`
-          : `${formatDuration((now - submitted) / 1000)} ago`}
+        {ran != null ? formatDuration(ran) : formatDuration((now - submitted) / 1000)}
       </td>
       <td
         className={`whitespace-nowrap px-2 py-0.5 text-right font-mono text-xs ${

@@ -17,7 +17,7 @@ celery = Celery(
     "logvault",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
-    include=["app.tasks", "app.scheduler", "app.health_monitor"],
+    include=["app.tasks", "app.scheduler", "app.health_monitor", "app.outbox", "app.reconciler"],
 )
 
 celery.conf.update(
@@ -34,6 +34,12 @@ celery.conf.update(
     timezone="UTC",
     enable_utc=True,
     beat_schedule={
+        # Durable dispatch: republish anything the outbox still owes, including
+        # work created while the broker was unreachable.
+        "publish-outbox": {"task": "logvault.publish_outbox", "schedule": 5.0},
+        # Recovery does not depend on a message arriving: expired leases are
+        # found in the database and redispatched here.
+        "reconcile-leases": {"task": "logvault.reconcile_leases", "schedule": 15.0},
         "scan-schedules": {"task": "logvault.scan_schedules", "schedule": 60.0},
         "cleanup-exports": {"task": "logvault.cleanup_exports", "schedule": 3600.0},
         "reap-stale-jobs": {"task": "logvault.reap_stale_jobs", "schedule": 300.0},

@@ -36,7 +36,7 @@ import {
   suggestUniformLayout,
 } from "@/components/output-columns-editor";
 import { extractGroupNames } from "@/lib/aggregation";
-import { PRESETS, Tz, epochToLocal, formatEpoch, localToEpoch } from "@/lib/time";
+import { PRESETS, Tz, epochToLocal, formatEpoch, localToEpoch, useTz } from "@/lib/time";
 
 function splitCsv(s: string): string[] {
   return s
@@ -365,6 +365,10 @@ function TemplateEditForm({
   onSaved: () => void;
 }) {
   const agg = tpl.aggregation;
+  // Saved searches have no timezone selector of their own; follow the app's
+  // display preference (UTC/IST) for the default CSV timestamp header.
+  const [tz] = useTz();
+  const defaultTimestampHeader = tz === "IST" ? "timestamp_ist" : "timestamp";
   const [name, setName] = React.useState(tpl.name);
   const [customer, setCustomer] = React.useState(tpl.customer ?? "");
   const [phrasesText, setPhrasesText] = React.useState(tpl.phrases.join(", "));
@@ -407,7 +411,7 @@ function TemplateEditForm({
     ...(agg?.raw_column_defaults ?? {}),
   });
   const [timestampHeader, setTimestampHeader] = React.useState(
-    agg?.timestamp_column ?? "timestamp_utc"
+    agg?.timestamp_column ?? defaultTimestampHeader
   );
   // log_format (which pattern matched) and message (the raw line) are the two
   // columns that aren't a regex field — their own toggles, seeded from
@@ -416,6 +420,14 @@ function TemplateEditForm({
   const [includeMessageColumn, setIncludeMessageColumn] = React.useState(
     agg?.include_message ?? true
   );
+
+  React.useEffect(() => {
+    setTimestampHeader((prev) =>
+      prev === "timestamp" || prev === "timestamp_ist" || prev === "timestamp_utc"
+        ? defaultTimestampHeader
+        : prev
+    );
+  }, [defaultTimestampHeader]);
   // Remembered source: pre-fills batch runs and the wizard. Blank = no
   // default (source picked at run time, as before).
   const { data: allIndexes } = useQuery({
@@ -494,7 +506,7 @@ function TemplateEditForm({
     });
     setColSeq(seq);
     setColLabels(layout.columnLabels);
-    setTimestampHeader(layout.timestampColumn);
+    setTimestampHeader(defaultTimestampHeader);
     setIncludedFieldsOverride(new Set(layout.rawColumns));
     setIncludeLogFormat(false);
     setIncludeMessageColumn(false);
@@ -553,11 +565,12 @@ function TemplateEditForm({
               include_message: includeMessageColumn,
               column_labels: columnLabels,
               raw_column_defaults: columnDefaults,
-              timestamp_column: timestampHeader.trim() || "timestamp_utc",
+              timestamp_column: timestampHeader.trim() || defaultTimestampHeader,
             }
           : null,
       }),
-    onSuccess: () => {
+    onSuccess: (tpl) => {
+      setCustomer(tpl.customer ?? "");
       // The API auto-registers a changed regex; refresh the library so the
       // wizard and detector see it immediately.
       qc.invalidateQueries({ queryKey: ["log-formats"] });
@@ -590,6 +603,7 @@ function TemplateEditForm({
               value={customer}
               onChange={(e) => setCustomer(e.target.value)}
               placeholder="ABSCBN"
+              maxLength={12}
               required
             />
             {!customer.trim() && (

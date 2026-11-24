@@ -1,0 +1,12 @@
+﻿{
+    "existing_jobs":  547,
+    "in_window":  true,
+    "rehearsal":  "upgraded-copy",
+    "csv_rows":  6451,
+    "credential_test":  true,
+    "job_id":  1010,
+    "rows":  6451,
+    "schema":  "0034",
+    "status":  "completed",
+    "rows_match":  true
+}

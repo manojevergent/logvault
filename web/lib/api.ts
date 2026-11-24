@@ -266,6 +266,11 @@ export type Job = {
   id: number;
   group_id?: number | null;
   status: JobStatus;
+  /** Release 1: "complete" | "partial" | "unknown". Absent on older API versions. */
+  completion_state?: string | null;
+  /** Number of skipped batches when completion_state is "partial". */
+  gap_count?: number | null;
+  gap_reason?: string | null;
   region_code: string;
   index_target_id: number;
   credential_id: number;
@@ -593,6 +598,8 @@ export type AuditEntry = {
 export type Settings = {
   environment: string;
   default_org_slug: string;
+  /** Active endpoint — the admin-saved BYOC URL when one is set. */
+  last9_api_base: string;
   storage_dir: string;
   export_retention_days: number;
   download_url_ttl_seconds: number;
@@ -624,6 +631,39 @@ export const updateNotificationConfig = (config: Partial<NotificationConfig>) =>
     body: JSON.stringify(config),
   });
 
+// ── Last9 endpoint ──────────────────────────────────────────────────────────
+//
+// The extraction endpoint. SaaS deployments leave it at the default; BYOC
+// deployments point it at the Last9 instance in their own cloud. Saved in the
+// admin UI and read at call time, so a change applies without a redeploy.
+
+export type Last9EndpointConfig = {
+  api_base: string;
+  /** "database" when an admin-saved URL is active, "env" when the fallback is. */
+  source: "database" | "env";
+  default_api_base: string;
+};
+
+export type Last9EndpointTestResult = {
+  ok: boolean;
+  status_code: number | null;
+  message: string;
+};
+
+export const getLast9Endpoint = () => req<Last9EndpointConfig>("/settings/last9");
+
+export const updateLast9Endpoint = (api_base: string) =>
+  req<Last9EndpointConfig>("/settings/last9", {
+    method: "PATCH",
+    body: JSON.stringify({ api_base }),
+  });
+
+export const testLast9Endpoint = (api_base: string) =>
+  req<Last9EndpointTestResult>("/settings/last9/test", {
+    method: "POST",
+    body: JSON.stringify({ api_base }),
+  });
+
 // ── system health alerts ────────────────────────────────────────────────────
 
 export type HealthAlertConfig = {
@@ -631,6 +671,8 @@ export type HealthAlertConfig = {
   cpu_threshold_pct: number;
   memory_threshold_pct: number;
   disk_threshold_pct: number;
+  /** Blank = the export volume. The worker falls back to it if this path is absent. */
+  disk_path: string;
   cooldown_minutes: number;
   slack: boolean;
   email: boolean;
@@ -638,7 +680,7 @@ export type HealthAlertConfig = {
   notify_on_recovery: boolean;
 };
 
-export type HealthAlertConfigOut = HealthAlertConfig & { disk_path: string | null };
+export type HealthAlertConfigOut = HealthAlertConfig;
 
 export type HealthSample = {
   available: boolean;
@@ -652,6 +694,9 @@ export type HealthSample = {
   disk_free_gb?: number;
   disk_total_gb?: number;
   disk_path?: string;
+  /** Total size and count of files in the export volume. */
+  exports_size_bytes?: number;
+  exports_files?: number;
   load1?: number | null;
   /** Active alert thresholds, so any signed-in user can colour the widget. */
   thresholds?: { cpu: number; memory: number; disk: number };
@@ -736,6 +781,10 @@ export type Schedule = {
   last_run_job_id: number | null;
   bq_config: BQConfig | null;
   alert_recipients: string[];
+  alert_on_row_drop: boolean;
+  row_drop_threshold_pct: number;
+  alert_on_unmatched: boolean;
+  unmatched_threshold: number;
   s3_profile_id: number | null;
   s3_profile_label: string | null;
 };
@@ -763,6 +812,10 @@ export type ScheduleInput = {
   /** BigQuery destination config; null = no BQ load */
   bq_config?: BQConfig | null;
   alert_recipients?: string[];
+  alert_on_row_drop?: boolean;
+  row_drop_threshold_pct?: number;
+  alert_on_unmatched?: boolean;
+  unmatched_threshold?: number;
   s3_profile_id?: number | null;
 };
 
@@ -790,6 +843,10 @@ export const updateSchedule = (
     phrases?: string[];
     ids?: string[];
     alert_recipients?: string[];
+    alert_on_row_drop?: boolean;
+    row_drop_threshold_pct?: number;
+    alert_on_unmatched?: boolean;
+    unmatched_threshold?: number;
     bq_config?: BQConfig | null;
     s3_profile_id?: number | null;
   }
@@ -1266,6 +1323,9 @@ export type GroupSummary = {
   created_at: string;
   start_epoch: number;
   end_epoch: number;
+  chunk_hours: number;
+  id_batch_size: number;
+  output_format: string;
   is_preview: boolean;
   parent_group_id: number | null;
   total_jobs: number;
@@ -1298,3 +1358,17 @@ export const cancelGroup = (id: number) =>
   req<GroupDetail>(`/groups/${id}/cancel`, { method: "POST" });
 export const retryGroup = (id: number) =>
   req<GroupDetail>(`/groups/${id}/retry`, { method: "POST" });
+
+export type GroupRerunInput = {
+  name?: string;
+  start_epoch?: number;
+  end_epoch?: number;
+  chunk_hours?: number;
+  id_batch_size?: number;
+  output_format?: "csv" | "jsonl";
+  is_preview?: boolean;
+  job_ids?: number[];
+};
+
+export const rerunGroup = (id: number, body: GroupRerunInput = {}) =>
+  req<GroupDetail>(`/groups/${id}/rerun`, { method: "POST", body: JSON.stringify(body) });

@@ -45,6 +45,7 @@ import {
   retryS3Upload,
   useRole,
 } from "@/lib/api";
+import { completionOf, gapSummary, jobProgress } from "@/lib/completion";
 import { formatDuration, formatRange, useTz } from "@/lib/time";
 
 type Progress = {
@@ -226,13 +227,9 @@ export default function JobDetailPage() {
   const rows = progress?.rows_written ?? job?.rows_written ?? 0;
   const completed = progress?.completed_chunks ?? job?.completed_chunks ?? 0;
   const total = progress?.total_chunks ?? job?.total_chunks ?? 0;
-  // A completed job is 100% by definition. `total_chunks` is an estimate that
-  // the worker re-fits as it adapts chunk size, and runs finished before that
-  // re-fit still carry the old denominator — that is how a job completed at
-  // "13 / 25" (52%). The status is the authority for finished work; in-flight
-  // jobs keep the live ratio.
-  const pct =
-    status === "completed" ? 100 : total ? Math.min(100, Math.round((completed / total) * 100)) : 0;
+  // The status is the authority for finished work; in-flight jobs keep the live
+  // chunk ratio. See jobProgress for why a completed job can read "13 / 25".
+  const pct = jobProgress({ status, completed_chunks: completed, total_chunks: total });
   const done = TERMINAL.includes(status);
 
   React.useEffect(() => {
@@ -372,6 +369,11 @@ export default function JobDetailPage() {
             </h1>
             <Badge tone={JOB_TONE[status as keyof typeof JOB_TONE] ?? "neutral"}>{status}</Badge>
             {job.is_preview && <Badge tone="warning">preview</Badge>}
+            {completionOf(job).isPartial && (
+              <Badge tone="warning" title={completionOf(job).detail ?? undefined}>
+                partial
+              </Badge>
+            )}
             {job.group_id != null && (
               <Link
                 href={`/groups/${job.group_id}`}
@@ -381,6 +383,12 @@ export default function JobDetailPage() {
               </Link>
             )}
           </div>
+          {completionOf(job).isPartial && (
+            <p className="mt-1 max-w-3xl text-xs text-warning">
+              Partial output: {gapSummary(job)}. The download is available but does
+              not contain every selected record.
+            </p>
+          )}
           <p className="font-mono text-xs text-muted-foreground">
             {searchName && <>Job #{job.id} · </>}
             {job.region_code} · {formatRange(job.start_epoch, job.end_epoch, tz)}{" "}

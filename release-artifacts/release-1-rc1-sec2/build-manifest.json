@@ -1,0 +1,45 @@
+﻿{
+    "alembic_revision":  "0034",
+    "security":  {
+                     "api":  "cryptography+python-jose clean; starlette+ecdsa deferred",
+                     "worker":  "clean"
+                 },
+    "product":  "Last9 Web Application",
+    "candidate":  "RC1-sec2",
+    "gate_b":  "NOT GRANTED",
+    "release":  "Release 1",
+    "supersedes":  "RC1, RC1-monitoring-fix1, RC1-sec1",
+    "web_build":  {
+                      "next_public_api_base_url":  "http://localhost:8000 (baked at build time - MUST be rebuilt with the production URL before deployment)",
+                      "cmd":  "node server.js",
+                      "user":  "nextjs",
+                      "dockerfile":  "web/Dockerfile.prod"
+                  },
+    "built_at_utc":  "2026-11-15T11:36:08Z",
+    "gate_a":  "GRANTED 2026-11-15 (self-certified, sole named holder)",
+    "limitations":  [
+                        "Extraction/artifact/pointer NOT TESTED - accepted limitation",
+                        "starlette 0.41.3 and ecdsa 0.19.2 deferred",
+                        "Single-person control",
+                        "NEXT_PUBLIC_API_BASE_URL baked as localhost - rebuild for production"
+                    ],
+    "working_tree_modified":  true,
+    "tests":  {
+                  "web_image":  "HTTP 200, standalone, no dev tooling",
+                  "api":  "289 passed",
+                  "worker":  "all passed",
+                  "frontend":  "8 passed + tsc clean"
+              },
+    "git_head":  "6719568f6fe7233e74aa151e3ba3531b2d6cb99d",
+    "images":  {
+                   "api":  "sha256:5cf482c20c449c1cec4b0cad99064bc1f5cfca5ac7ad81afce260f97db7b4eea",
+                   "web":  "sha256:11887ffd088d63cece66fdc1b1058c6c40c214910c2e4acb54eadbf25ebaa071",
+                   "worker":  "sha256:c6f17b4959fe02cde852cb92547c81b267119c5e012366d7d24dbd28268426e5"
+               },
+    "git_branch":  "release-1/p1-dispatch",
+    "deps":  {
+                 "python_jose":  "3.4.0",
+                 "starlette":  "0.41.3 (deferred)",
+                 "cryptography":  "50.0.0"
+             }
+}

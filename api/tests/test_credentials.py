@@ -40,7 +40,11 @@ def test_test_connection_success_caches_status(client, monkeypatch):
     monkeypatch.setattr(
         creds_router,
         "refresh_access_token",
-        lambda _rt: {"access_token": "AT", "refresh_token": None, "expires_at": 9_999_999_999},
+        lambda _rt, **_kw: {
+            "access_token": "AT",
+            "refresh_token": None,
+            "expires_at": 9_999_999_999,
+        },
     )
     resp = client.post(f"/credentials/{cid}/test")
     assert resp.status_code == 200
@@ -52,7 +56,7 @@ def test_test_connection_success_caches_status(client, monkeypatch):
 def test_test_connection_failure_returns_ok_false(client, monkeypatch):
     cid = _create(client).json()["id"]
 
-    def boom(_rt):
+    def boom(_rt, **_kw):
         raise ValueError("Last9 returned HTTP 401")
 
     monkeypatch.setattr(creds_router, "refresh_access_token", boom)

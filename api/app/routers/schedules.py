@@ -34,6 +34,40 @@ def _get_or_404(db: Session, sid: int) -> Schedule:
     return s
 
 
+def _check_alert_config(
+    db: Session,
+    *,
+    alert_on_row_drop: bool,
+    alert_on_unmatched: bool,
+    alert_recipients: list[str],
+    aggregation: dict | None,
+) -> None:
+    """Reject alert settings that could never be delivered.
+
+    The worker only records "Anomaly detected" and sends when a channel exists,
+    so accepting these silently would give an operator a schedule that looks
+    monitored and pages nobody. The UI warns about the parse-pattern case; the
+    API is the authority and must enforce it too.
+    """
+    if not (alert_on_row_drop or alert_on_unmatched):
+        return
+    if alert_on_unmatched and not (aggregation and aggregation.get("enabled")):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "alert_on_unmatched needs aggregation enabled: unmatched rows are "
+            "only counted when a parse pattern runs",
+        )
+    if not alert_recipients:
+        from app import notifications
+
+        if not notifications.load_config(db).get("slack_webhook_url"):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "an anomaly alert needs at least one recipient email or a Slack "
+                "webhook configured in Settings",
+            )
+
+
 def _check_aggregation(agg) -> None:
     if agg and agg.enabled:
         try:
@@ -62,6 +96,13 @@ def create_schedule(
             "a schedule needs at least one required phrase, exact phrase or ID",
         )
     _check_aggregation(body.aggregation)
+    _check_alert_config(
+        db,
+        alert_on_row_drop=body.alert_on_row_drop,
+        alert_on_unmatched=body.alert_on_unmatched,
+        alert_recipients=body.alert_recipients,
+        aggregation=body.aggregation.model_dump() if body.aggregation else None,
+    )
     filter_spec = {
         "phrases": body.phrases,
         "ids": body.ids,
@@ -90,6 +131,10 @@ def create_schedule(
         filter_spec=filter_spec,
         s3_profile_id=s3_profile.id if s3_profile else None,
         alert_recipients=body.alert_recipients,
+        alert_on_row_drop=body.alert_on_row_drop,
+        row_drop_threshold_pct=body.row_drop_threshold_pct,
+        alert_on_unmatched=body.alert_on_unmatched,
+        unmatched_threshold=body.unmatched_threshold,
         bq_config=body.bq_config.model_dump() if body.bq_config else None,
     )
     db.add(sched)
@@ -188,6 +233,10 @@ def import_schedule(body: ScheduleExport, db: Session = Depends(get_db)) -> Sche
         aggregation=body.aggregation,
         customer=body.customer,
         alert_recipients=body.alert_recipients,
+        alert_on_row_drop=body.alert_on_row_drop,
+        row_drop_threshold_pct=body.row_drop_threshold_pct,
+        alert_on_unmatched=body.alert_on_unmatched,
+        unmatched_threshold=body.unmatched_threshold,
         bq_config=body.bq_config,
         s3_profile_id=s3_profile.id if s3_profile else None,
     )
@@ -228,6 +277,10 @@ def export_schedule(sid: int, db: Session = Depends(get_db)) -> ScheduleExport:
         customer=fs.get("customer", ""),
         aggregation=fs.get("aggregation"),
         alert_recipients=s.alert_recipients,
+        alert_on_row_drop=s.alert_on_row_drop,
+        row_drop_threshold_pct=s.row_drop_threshold_pct,
+        alert_on_unmatched=s.alert_on_unmatched,
+        unmatched_threshold=s.unmatched_threshold,
         bq_config=BQConfig(**s.bq_config) if s.bq_config else None,
         s3_profile=S3ProfileRef(name=s3_profile.name) if s3_profile else None,
     )
@@ -246,6 +299,14 @@ def update_schedule(sid: int, body: ScheduleUpdate, db: Session = Depends(get_db
         s.calendar_day = body.calendar_day
     if body.alert_recipients is not None:
         s.alert_recipients = body.alert_recipients
+    if body.alert_on_row_drop is not None:
+        s.alert_on_row_drop = body.alert_on_row_drop
+    if body.row_drop_threshold_pct is not None:
+        s.row_drop_threshold_pct = body.row_drop_threshold_pct
+    if body.alert_on_unmatched is not None:
+        s.alert_on_unmatched = body.alert_on_unmatched
+    if body.unmatched_threshold is not None:
+        s.unmatched_threshold = body.unmatched_threshold
     if body.bq_config is not None:
         s.bq_config = body.bq_config.model_dump()
     if "s3_profile_id" in body.model_fields_set:
@@ -278,6 +339,23 @@ def update_schedule(sid: int, body: ScheduleUpdate, db: Session = Depends(get_db
             source_name=s.name,
             source_kind="schedule",
             source_id=s.id,
+        )
+    # Only validate when the request actually touches the alert settings or the
+    # parse pattern. A legacy schedule that already has an undeliverable alert
+    # must still be editable for unrelated fields (a rename, a new interval).
+    touches_alerts = (
+        body.alert_on_row_drop is not None
+        or body.alert_on_unmatched is not None
+        or body.alert_recipients is not None
+        or body.aggregation is not None
+    )
+    if touches_alerts:
+        _check_alert_config(
+            db,
+            alert_on_row_drop=s.alert_on_row_drop,
+            alert_on_unmatched=s.alert_on_unmatched,
+            alert_recipients=s.alert_recipients or [],
+            aggregation=(s.filter_spec or {}).get("aggregation"),
         )
     db.commit()
     db.refresh(s)

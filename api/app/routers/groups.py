@@ -19,6 +19,7 @@ from app.deps import get_current_user
 from app.models import ExtractionGroup, IndexTarget, Job, Last9Credential, User
 from app.routers.jobs import (
     MAX_BATCH_ITEMS,
+    _DOWNLOADABLE,
     _new_job_row,
     _resolve_batch_plans,
     _to_out,
@@ -26,6 +27,7 @@ from app.routers.jobs import (
 from app.schemas import (
     GroupCreate,
     GroupDetail,
+    GroupRerun,
     GroupStatus,
     GroupSummary,
 )
@@ -59,6 +61,9 @@ def _summary(group: ExtractionGroup, jobs: list[Job]) -> GroupSummary:
         created_at=group.created_at,
         start_epoch=group.start_epoch,
         end_epoch=group.end_epoch,
+        chunk_hours=group.chunk_hours,
+        id_batch_size=group.id_batch_size,
+        output_format=group.output_format,
         is_preview=bool(group.is_preview),
         parent_group_id=group.parent_group_id,
         total_jobs=len(jobs),
@@ -89,7 +94,17 @@ def _detail(db: Session, group: ExtractionGroup) -> GroupDetail:
         )
     return GroupDetail(
         **_summary(group, jobs).model_dump(),
-        jobs=[_to_out(job, credential_label=labels.get(job.credential_id)) for job in jobs],
+        # Only a job that has reached a downloadable state can have an output
+        # file on disk. Queued/running jobs used to stat five paths each on every
+        # 4-second poll, against the volume that also hosts pgdata.
+        jobs=[
+            _to_out(
+                job,
+                credential_label=labels.get(job.credential_id),
+                check_files=job.status in _DOWNLOADABLE,
+            )
+            for job in jobs
+        ],
     )
 
 
@@ -98,6 +113,101 @@ def _get_or_404(db: Session, group_id: int) -> ExtractionGroup:
     if group is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "group not found")
     return group
+
+
+def _resolve_sources(db: Session, jobs: list[Job]) -> list[tuple[Job, int]]:
+    """Pin each job to an index and credential that still exist, or 422.
+
+    Re-running a historical job is only safe while its source is still there;
+    the alternative is a queued job that fails a minute later with an opaque
+    reference error.
+
+    Looked up in two queries rather than one or two per job: a ten-search group
+    used to cost ~20 round trips before anything was queued.
+    """
+    index_ids = {job.index_target_id for job in jobs if job.index_target_id}
+    indexes = {
+        idx.id: idx
+        for idx in db.execute(
+            select(IndexTarget).where(IndexTarget.id.in_(index_ids))
+        ).scalars()
+    }
+    credential_ids = {job.credential_id for job in jobs if job.credential_id}
+    credential_ids |= {idx.credential_id for idx in indexes.values() if idx.credential_id}
+    credentials = set(
+        db.execute(
+            select(Last9Credential.id).where(Last9Credential.id.in_(credential_ids))
+        ).scalars()
+    )
+
+    plans: list[tuple[Job, int]] = []
+    for job in jobs:
+        label = (job.filter_spec or {}).get("label") or f"job {job.id}"
+        idx = indexes.get(job.index_target_id)
+        if idx is None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"index for {label} no longer exists",
+            )
+        credential_id = job.credential_id
+        if credential_id not in credentials:
+            credential_id = idx.credential_id
+        if credential_id is None or credential_id not in credentials:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"credential for {label} no longer exists",
+            )
+        plans.append((job, credential_id))
+    return plans
+
+
+def _launch(
+    db: Session,
+    *,
+    group: ExtractionGroup,
+    pairs: list[tuple[Job, Job]],
+    user: User,
+    action: str,
+    source_group_id: int,
+    extra: dict | None = None,
+) -> GroupDetail:
+    """Audit, queue and dispatch a freshly created group in one place.
+
+    Shared by retry and re-run so both record the same audit trail and use the
+    same outbox-first dispatch order. `pairs` is (source job, clone).
+    """
+    audit.record(
+        db,
+        action,
+        "group",
+        group.id,
+        {"from_group": source_group_id, "jobs": len(pairs), **(extra or {})},
+        user_id=user.email,
+    )
+    for source, clone in pairs:
+        audit.record(
+            db,
+            action,
+            "job",
+            clone.id,
+            {"from_job": source.id, "group_id": group.id},
+            user_id=user.email,
+        )
+    from app.outbox import enqueue as enqueue_dispatch
+
+    # Capture the ids before the commit expires the instances: dispatch only
+    # needs the id, so refreshing every clone afterwards was N wasted queries.
+    clone_ids = [clone.id for _source, clone in pairs]
+    for clone_id in clone_ids:
+        enqueue_dispatch(db, clone_id)
+    db.commit()
+    db.refresh(group)
+
+    from app.tasks_client import dispatch_job
+
+    for clone_id in clone_ids:
+        dispatch_job(clone_id)
+    return _detail(db, group)
 
 
 @router.get("", response_model=list[GroupSummary])
@@ -213,6 +323,10 @@ def create_group(
             {"group_id": group.id, "label": (job.filter_spec or {}).get("label")},
             user_id=user.email,
         )
+    from app.outbox import enqueue as enqueue_dispatch
+
+    for job in jobs:
+        enqueue_dispatch(db, job.id)
     db.commit()
     db.refresh(group)
     for job in jobs:
@@ -273,23 +387,7 @@ def retry_group(
             "this group has no failed or canceled jobs to retry",
         )
 
-    plans: list[tuple[Job, int]] = []
-    for job in failed:
-        idx = db.get(IndexTarget, job.index_target_id)
-        if idx is None:
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
-                f"index for {(job.filter_spec or {}).get('label') or f'job {job.id}'} no longer exists",
-            )
-        credential_id = job.credential_id
-        if db.get(Last9Credential, credential_id) is None:
-            credential_id = idx.credential_id
-        if credential_id is None or db.get(Last9Credential, credential_id) is None:
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
-                f"credential for {(job.filter_spec or {}).get('label') or f'job {job.id}'} no longer exists",
-            )
-        plans.append((job, credential_id))
+    plans = _resolve_sources(db, failed)
 
     retry = ExtractionGroup(
         name=f"{group.name} (retry)"[:160],
@@ -328,30 +426,127 @@ def retry_group(
     db.add_all(clones)
     db.flush()
 
-    audit.record(
+    return _launch(
         db,
-        "retry",
-        "group",
-        retry.id,
-        {"from_group": group.id, "jobs": len(clones)},
-        user_id=user.email,
+        group=retry,
+        pairs=list(zip([job for job, _cred in plans], clones, strict=True)),
+        user=user,
+        action="retry",
+        source_group_id=group.id,
     )
-    for clone, (original, _cred) in zip(clones, plans, strict=True):
-        audit.record(
-            db,
-            "retry",
-            "job",
-            clone.id,
-            {"from_job": original.id, "group_id": retry.id},
-            user_id=user.email,
+
+
+@router.post("/{group_id}/rerun", response_model=GroupDetail, status_code=status.HTTP_201_CREATED)
+def rerun_group(
+    group_id: int,
+    body: GroupRerun | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> GroupDetail:
+    """Re-run this group's searches under edited settings, as a new group.
+
+    Unlike retry it does not care whether the original jobs succeeded: the
+    point is repeating a run over a different window or with different
+    settings. The original group, its files and its job history stay intact,
+    and the new group points back at it.
+    """
+    body = body or GroupRerun()
+    group = _get_or_404(db, group_id)
+    all_jobs = _jobs_for(db, group.id)
+    if not all_jobs:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "this group has no jobs to re-run"
         )
-    db.commit()
-    db.refresh(retry)
-    for clone in clones:
-        db.refresh(clone)
 
-    from app.tasks_client import dispatch_job
+    if body.job_ids is None:
+        selected = all_jobs
+    else:
+        by_id = {job.id: job for job in all_jobs}
+        unknown = [job_id for job_id in body.job_ids if job_id not in by_id]
+        if unknown:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"job(s) {', '.join(str(i) for i in unknown)} are not in this group",
+            )
+        wanted = set(body.job_ids)
+        selected = [job for job in all_jobs if job.id in wanted]
+    if not selected:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "select at least one search to re-run"
+        )
+    if len(selected) > MAX_BATCH_ITEMS:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"at most {MAX_BATCH_ITEMS} searches per group",
+        )
 
-    for clone in clones:
-        dispatch_job(clone.id)
-    return _detail(db, retry)
+    start_epoch = group.start_epoch if body.start_epoch is None else body.start_epoch
+    end_epoch = group.end_epoch if body.end_epoch is None else body.end_epoch
+    if end_epoch <= start_epoch:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "end must be after start")
+
+    chunk_hours = group.chunk_hours if body.chunk_hours is None else body.chunk_hours
+    id_batch_size = group.id_batch_size if body.id_batch_size is None else body.id_batch_size
+    if chunk_hours < 1:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "chunk hours must be at least 1")
+    if id_batch_size < 1:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "ID batch size must be at least 1"
+        )
+    output_format = group.output_format if body.output_format is None else body.output_format
+    is_preview = group.is_preview if body.is_preview is None else body.is_preview
+    name = (body.name or "").strip() or f"{group.name} (re-run)"
+
+    plans = _resolve_sources(db, selected)
+
+    rerun = ExtractionGroup(
+        name=name[:160],
+        created_by=user.email,
+        start_epoch=start_epoch,
+        end_epoch=end_epoch,
+        chunk_hours=chunk_hours,
+        id_batch_size=id_batch_size,
+        output_format=output_format,
+        is_preview=is_preview,
+        parent_group_id=group.id,
+    )
+    db.add(rerun)
+    db.flush()
+
+    clones = [
+        Job(
+            status="queued",
+            region_code=job.region_code,
+            index_target_id=job.index_target_id,
+            credential_id=credential_id,
+            start_epoch=start_epoch,
+            end_epoch=end_epoch,
+            chunk_hours=chunk_hours,
+            id_batch_size=id_batch_size,
+            filter_spec=job.filter_spec,
+            output_format=output_format,
+            is_preview=is_preview,
+            s3_profile_id=job.s3_profile_id,
+            s3_destination=job.s3_destination,
+            created_by=user.email,
+            group_id=rerun.id,
+        )
+        for job, credential_id in plans
+    ]
+    db.add_all(clones)
+    db.flush()
+
+    return _launch(
+        db,
+        group=rerun,
+        pairs=list(zip([job for job, _cred in plans], clones, strict=True)),
+        user=user,
+        action="rerun",
+        source_group_id=group.id,
+        extra={
+            "window": [start_epoch, end_epoch],
+            "chunk_hours": chunk_hours,
+            "id_batch_size": id_batch_size,
+            "output_format": output_format,
+        },
+    )

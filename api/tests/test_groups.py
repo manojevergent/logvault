@@ -197,6 +197,112 @@ def test_group_retry_without_failures_is_rejected(client, monkeypatch):
     assert client.post(f"/groups/{group['id']}/retry").status_code == 422
 
 
+def test_rerun_copies_every_search_with_an_edited_window(client, monkeypatch):
+    a = _template(client, "RERUN_A")
+    b = _template(client, "RERUN_B")
+    group = _group(client, monkeypatch, [a["id"], b["id"]]).json()
+    with client.session_factory() as db:
+        # Completed jobs are still re-runnable: unlike retry, this is not a
+        # failure path.
+        for job in group["jobs"]:
+            db.get(Job, job["id"]).status = "completed"
+        db.commit()
+
+    monkeypatch.setattr(tasks_client, "dispatch_job", lambda _id: None)
+    response = client.post(
+        f"/groups/{group['id']}/rerun",
+        json={
+            "name": "Next day",
+            "start_epoch": 86400,
+            "end_epoch": 172800,
+            "chunk_hours": 2,
+            "id_batch_size": 50,
+            "output_format": "jsonl",
+        },
+    )
+    assert response.status_code == 201, response.text
+    rerun = response.json()
+
+    assert rerun["id"] != group["id"]
+    assert rerun["parent_group_id"] == group["id"]
+    assert rerun["name"] == "Next day"
+    assert rerun["start_epoch"] == 86400
+    assert rerun["end_epoch"] == 172800
+    assert rerun["total_jobs"] == 2
+    for job in rerun["jobs"]:
+        assert job["status"] == "queued"
+        assert job["start_epoch"] == 86400
+        assert job["end_epoch"] == 172800
+        assert job["chunk_hours"] == 2
+        assert job["id_batch_size"] == 50
+        assert job["output_format"] == "jsonl"
+        assert job["group_id"] == rerun["id"]
+    assert {job["filter_spec"]["label"] for job in rerun["jobs"]} == {"RERUN_A", "RERUN_B"}
+
+    # The original run keeps its own window and statuses.
+    original = client.get(f"/groups/{group['id']}").json()
+    assert original["status"] == "completed"
+    assert original["start_epoch"] == 0
+    assert original["end_epoch"] == 86400
+
+
+def test_rerun_defaults_to_the_source_settings(client, monkeypatch):
+    a = _template(client, "DEFAULTS")
+    group = _group(
+        client,
+        monkeypatch,
+        [a["id"]],
+        chunk_hours=3,
+        id_batch_size=25,
+        output_format="jsonl",
+    ).json()
+
+    monkeypatch.setattr(tasks_client, "dispatch_job", lambda _id: None)
+    response = client.post(f"/groups/{group['id']}/rerun")
+    assert response.status_code == 201, response.text
+    rerun = response.json()
+    assert rerun["name"] == f"{group['name']} (re-run)"
+    assert rerun["start_epoch"] == group["start_epoch"]
+    assert rerun["end_epoch"] == group["end_epoch"]
+    assert rerun["jobs"][0]["chunk_hours"] == 3
+    assert rerun["jobs"][0]["id_batch_size"] == 25
+    assert rerun["jobs"][0]["output_format"] == "jsonl"
+
+
+def test_rerun_can_select_a_subset(client, monkeypatch):
+    a = _template(client, "PICK_A")
+    b = _template(client, "PICK_B")
+    group = _group(client, monkeypatch, [a["id"], b["id"]]).json()
+    keep = next(job for job in group["jobs"] if job["filter_spec"]["label"] == "PICK_B")
+
+    monkeypatch.setattr(tasks_client, "dispatch_job", lambda _id: None)
+    response = client.post(f"/groups/{group['id']}/rerun", json={"job_ids": [keep["id"]]})
+    assert response.status_code == 201, response.text
+    rerun = response.json()
+    assert rerun["total_jobs"] == 1
+    assert rerun["jobs"][0]["filter_spec"]["label"] == "PICK_B"
+
+
+def test_rerun_rejects_a_job_from_another_group_and_a_bad_window(client, monkeypatch):
+    a = _template(client, "VALIDATE_A")
+    group = _group(client, monkeypatch, [a["id"]]).json()
+    other = _group(client, monkeypatch, [a["id"]], name="Other").json()
+    foreign = other["jobs"][0]["id"]
+
+    response = client.post(f"/groups/{group['id']}/rerun", json={"job_ids": [foreign]})
+    assert response.status_code == 422
+    assert str(foreign) in response.json()["detail"]
+
+    response = client.post(
+        f"/groups/{group['id']}/rerun",
+        json={"start_epoch": 100, "end_epoch": 100},
+    )
+    assert response.status_code == 422
+
+    assert client.post(f"/groups/{group['id']}/rerun", json={"chunk_hours": 0}).status_code == 422
+    assert client.post(f"/groups/{group['id']}/rerun", json={"id_batch_size": 0}).status_code == 422
+
+
 def test_batch_endpoint_now_creates_a_group(client, monkeypatch):
     a = _template(client, "BATCH_A")
     b = _template(client, "BATCH_B")

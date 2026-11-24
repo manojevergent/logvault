@@ -1,0 +1,3 @@
+﻿last9-api:release-1-final-616a8d3-fix3 sha256:78f7f987cf3bc5074e6f3aeb9b08c3816bf4e18d7ddb57b3b4772de21c6396bb
+last9-worker:release-1-final-616a8d3-fix3 sha256:c36ac27faa3c386a04f0ed08c1d3123a0aa28f9d9762047c701d2bcf596d8917
+last9-web:release-1-final-78fb0a7 sha256:6a6489dcc5d3d9ef76ef5c6cc0cc4ab11faa8fac376895a14f9974b0fd660ab1

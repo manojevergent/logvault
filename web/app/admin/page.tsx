@@ -12,13 +12,17 @@ import {
   AuditEntry,
   AuthUser,
   HealthAlertConfig,
+  Last9EndpointTestResult,
   createUser,
   deleteUser,
   getHealthAlertConfig,
+  getLast9Endpoint,
   getWorkerCapacity,
   setWorkerConcurrency,
   testHealthAlert,
+  testLast9Endpoint,
   updateHealthAlertConfig,
+  updateLast9Endpoint,
   useRole,
   listAudit,
   listUsers,
@@ -32,6 +36,7 @@ export default function AdminPage() {
   return (
     <div className="mx-auto max-w-5xl animate-fade-in space-y-10 px-6 py-8">
       {isAdmin && <UserManagement />}
+      {isAdmin && <Last9EndpointSettings />}
       {isAdmin && <NotificationSettings />}
       {isAdmin && <SystemHealthSettings />}
       {isAdmin && <WorkerCapacityCard />}
@@ -277,6 +282,7 @@ function SystemHealthSettings() {
     cpu_threshold_pct: 85,
     memory_threshold_pct: 85,
     disk_threshold_pct: 85,
+    disk_path: "",
     cooldown_minutes: 30,
     slack: true,
     email: false,
@@ -292,6 +298,7 @@ function SystemHealthSettings() {
       cpu_threshold_pct: saved.cpu_threshold_pct,
       memory_threshold_pct: saved.memory_threshold_pct,
       disk_threshold_pct: saved.disk_threshold_pct,
+      disk_path: saved.disk_path ?? "",
       cooldown_minutes: saved.cooldown_minutes,
       slack: saved.slack,
       email: saved.email,
@@ -331,13 +338,13 @@ function SystemHealthSettings() {
           <h2 className="text-lg font-semibold tracking-tight">System health alerts</h2>
           <p className="text-sm text-muted-foreground">
             Alert Slack and/or email when CPU, memory or disk crosses a threshold. Sampled by the
-            worker every beat tick.
+            worker every minute.
           </p>
         </div>
 
         <div className="space-y-3 border-t border-border pt-4">
           <div className="flex items-center justify-between">
-            <h3 className="text-sm font-medium">Current host</h3>
+            <h3 className="text-sm font-medium">Current usage</h3>
             {metrics?.available ? (
               <span className="font-mono text-[11px] text-muted-foreground">
                 {metrics.ts ? new Date(metrics.ts).toLocaleTimeString() : ""}
@@ -415,6 +422,18 @@ function SystemHealthSettings() {
               />
               Monitoring enabled
             </label>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Disk path</Label>
+            <Input
+              value={cfg.disk_path}
+              onChange={(e) => setCfg({ ...cfg, disk_path: e.target.value })}
+              placeholder="/data/exports"
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Leave blank to monitor the export volume. A path that does not exist in the worker
+              falls back to that volume.
+            </p>
           </div>
         </div>
 
@@ -722,6 +741,103 @@ function NotificationSettings() {
             )}
           </div>
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * The Last9 API base URL. SaaS deployments keep the default; a BYOC install
+ * points this at the Last9 instance in their own cloud. Saved in the database
+ * and read at call time, so switching hosts needs no image rebuild.
+ */
+function Last9EndpointSettings() {
+  const qc = useQueryClient();
+  const { data: saved, isLoading } = useQuery({
+    queryKey: ["last9-endpoint"],
+    queryFn: getLast9Endpoint,
+  });
+  const [apiBase, setApiBase] = React.useState("");
+  const [probe, setProbe] = React.useState<Last9EndpointTestResult | null>(null);
+
+  React.useEffect(() => {
+    if (saved) setApiBase(saved.api_base);
+  }, [saved]);
+
+  const save = useMutation({
+    mutationFn: () => updateLast9Endpoint(apiBase),
+    onSuccess: () => {
+      setProbe(null);
+      qc.invalidateQueries({ queryKey: ["last9-endpoint"] });
+      // The read-only settings page shows the active URL too.
+      qc.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+  const test = useMutation({
+    mutationFn: () => testLast9Endpoint(apiBase),
+    onSuccess: setProbe,
+  });
+
+  return (
+    <Card>
+      <CardContent className="space-y-4 p-5">
+        <div className="space-y-1">
+          <h2 className="text-lg font-semibold tracking-tight">Last9 endpoint</h2>
+          <p className="text-sm text-muted-foreground">
+            Where extractions read logs from. Change it when Last9 runs in your own cloud (BYOC).
+          </p>
+        </div>
+
+        <div className="space-y-1.5 border-t border-border pt-4">
+          <Label>API base URL</Label>
+          <Input
+            value={apiBase}
+            spellCheck={false}
+            onChange={(e) => {
+              setApiBase(e.target.value);
+              setProbe(null);
+            }}
+            placeholder="https://app.last9.io/api/v4"
+          />
+          <p className="text-xs text-muted-foreground">
+            Include the API version path, e.g.{" "}
+            <code className="font-mono">https://last9.internal.example.com/api/v4</code>.{" "}
+            {saved?.source === "env"
+              ? "No saved value — the deployment default is in use."
+              : "Saved value in use."}
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
+          <Button
+            disabled={save.isPending || isLoading || !apiBase.trim()}
+            onClick={() => save.mutate()}
+          >
+            {save.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
+            Save endpoint
+          </Button>
+          <Button
+            variant="outline"
+            disabled={test.isPending || !apiBase.trim()}
+            onClick={() => test.mutate()}
+          >
+            {test.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
+            Test connection
+          </Button>
+          {save.isSuccess && <span className="text-xs text-success">✓ Saved</span>}
+          {save.isError && (
+            <span className="text-xs text-danger">{(save.error as Error).message}</span>
+          )}
+          {probe && (
+            <span className={`text-xs ${probe.ok ? "text-success" : "text-danger"}`}>
+              {probe.message}
+            </span>
+          )}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Applies to the next request and the next job — no restart. Jobs already running keep the
+          endpoint they started with.
+        </p>
       </CardContent>
     </Card>
   );

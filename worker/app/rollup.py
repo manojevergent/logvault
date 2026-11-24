@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select, text
 
-from app import db
+from app import db, fenced
 from app.config import get_settings
 from app.last9 import AggregationSpec, Aggregator, DistinctStore, store_path
 from app.notifications import send_failure_alert
@@ -82,8 +82,23 @@ def run_rollup(job_id: int) -> None:
         if job is None:
             return
         job = dict(job)
-        db.update_job(conn, job_id, status="running", started_at=_now(), error_message=None)
+        # Atomic claim, same ownership model as extraction. Two workers can no
+        # longer run the same rollup, and a duplicate delivery bows out instead
+        # of marking a live job running again.
+        lease_token = db.claim_job(
+            conn,
+            job_id,
+            owner_id="rollup",
+            started_at=_now(),
+            error_message=None,
+        )
+        if not lease_token:
+            return
         db.add_event(conn, job_id, "Rollup started")
+
+    def save(conn, _job_id, **values):
+        """Fenced write: a superseded rollup cannot overwrite newer state."""
+        return fenced.fenced_update(conn, job_id, lease_token, **values)
 
     customer = (job["filter_spec"] or {}).get("customer")
     spec_json = job["rollup_of"] or {}
@@ -93,33 +108,37 @@ def run_rollup(job_id: int) -> None:
     if not schedule_id or not agg_config.get("regex"):
         error_msg = "rollup needs a schedule_id and an aggregation spec"
         with eng.begin() as conn:
-            db.update_job(
+            applied = save(
                 conn,
                 job_id,
                 status="failed",
                 error_message=error_msg,
                 finished_at=_now(),
             )
-            db.add_event(conn, job_id, "Failed: incomplete rollup spec", level="error")
-            # Try to alert the schedule owner
-            try:
-                result = (
-                    conn.execute(
-                        text("SELECT id, name, alert_recipients FROM schedules WHERE id = :id"),
-                        {"id": schedule_id},
+            # F-02a-1: the fenced write is the authority on ownership. A refused
+            # write means another worker owns this job, so it must not inherit
+            # this worker's failure event or a false alert.
+            if applied:
+                db.add_event(conn, job_id, "Failed: incomplete rollup spec", level="error")
+                # Try to alert the schedule owner
+                try:
+                    result = (
+                        conn.execute(
+                            text("SELECT id, name, alert_recipients FROM schedules WHERE id = :id"),
+                            {"id": schedule_id},
+                        )
+                        .mappings()
+                        .first()
                     )
-                    .mappings()
-                    .first()
-                )
-                if result and result["alert_recipients"]:
-                    send_failure_alert(
-                        result["alert_recipients"],
-                        result["name"],
-                        job_id,
-                        error_msg,
-                    )
-            except Exception:
-                pass
+                    if result and result["alert_recipients"]:
+                        send_failure_alert(
+                            result["alert_recipients"],
+                            result["name"],
+                            job_id,
+                            error_msg,
+                        )
+                except Exception:
+                    pass
         return
 
     with eng.begin() as conn:
@@ -150,7 +169,7 @@ def run_rollup(job_id: int) -> None:
         for i, (s, path) in enumerate(usable, start=1):
             dest.merge_from(path)
             with eng.begin() as conn:
-                db.update_job(
+                save(
                     conn,
                     job_id,
                     completed_chunks=i,
@@ -183,49 +202,47 @@ def run_rollup(job_id: int) -> None:
         error_msg = str(exc)
         with eng.begin() as conn:
             job = db.load(conn, db.jobs, job_id)
-            db.update_job(
+            applied = save(
                 conn, job_id, status="failed", error_message=error_msg, finished_at=_now()
             )
-            db.add_event(conn, job_id, f"Failed: {exc}", level="error")
-            # Try to alert the schedule owner
-            if job:
-                try:
-                    result = (
-                        conn.execute(
-                            text("SELECT id, name, alert_recipients FROM schedules WHERE id = :id"),
-                            {"id": schedule_id},
+            # F-02a-1: only the owner may narrate the outcome. If the fenced
+            # write was refused, the new owner will report its own result; a
+            # "Failed" event or a failure email from this worker would be false.
+            if applied:
+                db.add_event(conn, job_id, f"Failed: {exc}", level="error")
+                # Try to alert the schedule owner
+                if job:
+                    try:
+                        result = (
+                            conn.execute(
+                                text(
+                                    "SELECT id, name, alert_recipients "
+                                    "FROM schedules WHERE id = :id"
+                                ),
+                                {"id": schedule_id},
+                            )
+                            .mappings()
+                            .first()
                         )
-                        .mappings()
-                        .first()
-                    )
-                    if result and result["alert_recipients"]:
-                        send_failure_alert(
-                            result["alert_recipients"],
-                            result["name"],
-                            job_id,
-                            error_msg,
-                        )
-                except Exception:
-                    pass
+                        if result and result["alert_recipients"]:
+                            send_failure_alert(
+                                result["alert_recipients"],
+                                result["name"],
+                                job_id,
+                                error_msg,
+                            )
+                    except Exception:
+                        pass
         return
 
     with eng.begin() as conn:
-        # A gap must be loud: a rollup that silently drops a day looks clean and
-        # under-reports, which is worse than one that says what it missed.
-        for s, why in skipped:
-            db.add_event(
-                conn,
-                job_id,
-                f"Skipped job {s['id']} ({_day(s['start_epoch'])}): {why}",
-                level="warn",
-            )
         msg = (
             f"Rollup completed — {snap['total_groups']} group(s) across "
             f"{len(usable)} run(s), {snap['rows_matched']} matching row(s)"
         )
         if skipped:
             msg += f"; {len(skipped)} run(s) skipped — counts are incomplete"
-        db.update_job(
+        applied = save(
             conn,
             job_id,
             status="completed",
@@ -238,7 +255,20 @@ def run_rollup(job_id: int) -> None:
             completed_chunks=len(usable),
             total_chunks=len(usable),
         )
-        db.add_event(conn, job_id, msg, level="warn" if skipped else "info")
+        # F-02a-1: the fenced write is the authority on ownership. When it is
+        # refused another worker owns this job and will publish its own result,
+        # so announcing a completion (or the gaps) here would be false.
+        if applied:
+            # A gap must be loud: a rollup that silently drops a day looks clean
+            # and under-reports, which is worse than one that says what it missed.
+            for s, why in skipped:
+                db.add_event(
+                    conn,
+                    job_id,
+                    f"Skipped job {s['id']} ({_day(s['start_epoch'])}): {why}",
+                    level="warn",
+                )
+            db.add_event(conn, job_id, msg, level="warn" if skipped else "info")
 
     dest.close()
 
