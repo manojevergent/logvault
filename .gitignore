@@ -46,3 +46,6 @@ web-build.log
 
 # Database dumps stay out of the repo; keep them in backups/
 release-artifacts/**/*.dump
+
+# Local scratch (exports, one-off scripts)
+/tmp/
