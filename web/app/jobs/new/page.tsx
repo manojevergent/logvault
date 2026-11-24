@@ -30,7 +30,15 @@ import {
   listTemplates,
   updateTemplate,
 } from "@/lib/api";
-import { PRESETS, Tz, epochToLocal, formatEpoch, localToEpoch } from "@/lib/time";
+import {
+  PRESETS,
+  Tz,
+  ceilToHour,
+  epochToLocal,
+  floorToHour,
+  formatEpoch,
+  localToEpoch,
+} from "@/lib/time";
 import { SavedRange, getRecentRanges, saveRange } from "@/lib/timestamps";
 
 // Each word is matched independently (like Last9's "contains all words"), not
@@ -819,8 +827,16 @@ export default function NewJobPage() {
     setPreset("custom");
     // Must use the zone the fields are read back in (`tz`), not a fixed one —
     // otherwise cloning while the toggle is on the other zone shifts the range.
-    setCustomStart(epochToLocal(cloneJob.start_epoch, tz));
-    setCustomEnd(epochToLocal(cloneJob.end_epoch, tz));
+    //
+    // Snap to the enclosing whole hours in that zone. A source window can start
+    // mid-hour (e.g. 00:01 from an earlier "last hour" run); "Edit & run" then
+    // prefills 00:01, and changing only the date silently keeps that minute, so
+    // a day-based rerun starts at 00:01 instead of 00:00. Rounding the start
+    // down and the end up means the new window always covers the original and
+    // begins exactly on the hour the user picked. The fields stay editable, so
+    // an intentionally odd time can still be typed in.
+    setCustomStart(epochToLocal(floorToHour(cloneJob.start_epoch, tz), tz));
+    setCustomEnd(epochToLocal(ceilToHour(cloneJob.end_epoch, tz), tz));
     const agg = cloneJob.filter_spec.aggregation;
     setAggEnabled(Boolean(agg?.enabled));
     if (agg?.enabled) {
