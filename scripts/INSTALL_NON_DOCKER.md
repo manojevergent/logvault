@@ -49,22 +49,57 @@ Paths:
 2. **Security group** — allow `80` and `443` only. The API, web, Postgres and
    Redis all listen on loopback.
 3. **Repo access** — the repository is private. Either:
-   - clone it on the host with a deploy key, or
-   - clone/pull it on your machine and run the installer from that checkout
-     (the script copies the tree to `/opt/logvault/app`).
+   - clone it on the host with a deploy key (recommended for updates), or
+   - clone/pull it on your machine and copy the tree to the host, then run the
+     installer from that checkout (the script syncs the tree to
+     `/opt/logvault/app`).
 
-   If you clone on the host, the checkout must be readable by the installer;
-   the script will `chown` the copy it makes.
+   A root-owned clone is `chown`ed to the service user on install. A clone
+   owned by another user is left alone — run the installer from a root-owned or
+   service-owned checkout.
 
 ---
 
 ## Quick start
 
-From a checkout of this repo:
+The script is `scripts/install.sh` (there is no separate
+`install-non-docker.sh`).
+
+### 1. Get the repo onto the host
+
+The repository is private, so the host needs read access. A deploy key is the
+usual choice:
 
 ```bash
-sudo DOMAIN=logvault.example.com \
-     TLS=1 TLS_EMAIL=ops@example.com \
+# on the prod host
+ssh-keygen -t ed25519 -C "logvault-prod" -f ~/.ssh/logvault_deploy -N ''
+cat ~/.ssh/logvault_deploy.pub
+# add that key as a read-only deploy key in GitHub -> Settings -> Deploy keys
+```
+
+Then clone it. Put the clone **outside** `/opt/logvault` so the installer can
+create the service user and its home directory cleanly:
+
+```bash
+git clone git@github.com:manojevergent/logvault.git ~/logvault
+cd ~/logvault
+git checkout release-1/p1-dispatch
+```
+
+### 2. Preview the install
+
+```bash
+sudo DOMAIN=logvault.example.com TLS=1 TLS_EMAIL=ops@example.com \
+     ./scripts/install.sh --dry-run
+```
+
+This prints every command it would run and changes nothing. Check the paths,
+the port numbers and the generated config before going ahead.
+
+### 3. Install
+
+```bash
+sudo DOMAIN=logvault.example.com TLS=1 TLS_EMAIL=ops@example.com \
      ./scripts/install.sh
 ```
 
@@ -72,13 +107,6 @@ Without a domain (plain HTTP, access by IP):
 
 ```bash
 sudo ./scripts/install.sh
-```
-
-Dry run first if you want to see every command:
-
-```bash
-sudo DOMAIN=logvault.example.com TLS=1 TLS_EMAIL=ops@example.com \
-     ./scripts/install.sh --dry-run
 ```
 
 The first run generates:
@@ -89,6 +117,17 @@ The first run generates:
 - an initial admin password (printed once, and stored in the env file)
 
 It prints the admin email/password and the service commands at the end.
+
+### 4. Verify
+
+```bash
+systemctl status logvault-api logvault-worker logvault-beat logvault-web
+curl -s http://127.0.0.1:8000/ready
+journalctl -u logvault-api -n 40 --no-pager
+```
+
+Then open the URL. The first login uses the admin email/password printed by the
+installer.
 
 ---
 
@@ -133,16 +172,30 @@ from `ENV_FILE`, so a normal update never invalidates saved Last9 credentials.
 
 ## Updating
 
+`--update` reinstalls Python dependencies, rebuilds the web app, runs
+`alembic upgrade head`, and restarts the services. Secrets and the database are
+kept.
+
+**If you installed from a separate clone** (`~/logvault`), update that clone and
+re-run its installer — it syncs the tree into `/opt/logvault/app`:
+
+```bash
+cd ~/logvault
+git pull --ff-only
+sudo ./scripts/install.sh --update
+```
+
+**If you cloned directly into `/opt/logvault/app`**, the installer pulls in
+place:
+
 ```bash
 sudo /opt/logvault/app/scripts/install.sh --update
 ```
 
-`--update` pulls the checkout, reinstalls Python dependencies, rebuilds the web
-app, runs `alembic upgrade head`, and restarts the services. Skip the web build
-when only Python changed:
+Skip the web build when only Python changed:
 
 ```bash
-sudo SKIP_WEB_BUILD=1 /opt/logvault/app/scripts/install.sh --update
+sudo SKIP_WEB_BUILD=1 ./scripts/install.sh --update
 ```
 
 ---

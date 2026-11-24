@@ -377,21 +377,32 @@ fi
 
 # ── application code ─────────────────────────────────────────────────────────
 step "Application code"
-# The script is run from a checkout. On the first run we copy it into APP_DIR
-# so later `--update` runs can operate on a stable path; if APP_DIR is already
-# a git checkout we leave it alone and let --update pull it.
+# The script is run from a checkout. Two shapes are supported:
+#   * run from APP_DIR itself   -> the checkout is the deployment; `--update`
+#                                  pulls it in place.
+#   * run from another clone    -> that clone is the source of truth; it is
+#                                  synced into APP_DIR on every run, so you
+#                                  pull once and re-run the installer.
 REPO_REAL="$(cd "$REPO_DIR" && pwd -P)"
 if [[ -d "$APP_DIR" ]]; then APP_REAL="$(cd "$APP_DIR" && pwd -P)"; else APP_REAL="$APP_DIR"; fi
 
-if [[ -d "$APP_DIR/.git" ]] && [[ "$APP_REAL" != "$REPO_REAL" ]]; then
-  info "using existing checkout at $APP_DIR"
-  if [[ "$MODE" == "update" ]]; then
+if [[ "$REPO_REAL" == "$APP_REAL" ]]; then
+  info "running from $APP_DIR"
+  if [[ "$MODE" == "update" && -d "$APP_DIR/.git" ]]; then
     run sudo -u "$APP_USER" git -C "$APP_DIR" fetch --prune origin
     run sudo -u "$APP_USER" git -C "$APP_DIR" pull --ff-only
   fi
-elif [[ "$REPO_REAL" != "$APP_REAL" ]]; then
-  # First install from a checkout that lives somewhere else: copy the tree.
-  # .git is kept so --update can pull later.
+  # A fresh clone made as root has to become writable by the service user
+  # before the venvs and the web build can be created.
+  if [[ "$MODE" == "install" ]] && [[ "$(stat -c %U "$APP_DIR" 2>/dev/null || echo '')" == "root" ]]; then
+    run chown -R "$APP_USER:$APP_USER" "$APP_DIR"
+  fi
+else
+  info "syncing $REPO_DIR -> $APP_DIR"
+  if [[ "$MODE" == "update" && -d "$REPO_DIR/.git" ]]; then
+    run git -C "$REPO_DIR" pull --ff-only \
+      || warn "could not pull $REPO_DIR; syncing the checkout as-is"
+  fi
   run rsync -a --delete \
     --exclude node_modules --exclude .next --exclude __pycache__ \
     --exclude '.venv' --exclude '*.pyc' --exclude '.pytest_cache' \
@@ -400,8 +411,6 @@ elif [[ "$REPO_REAL" != "$APP_REAL" ]]; then
     "$REPO_DIR/" "$APP_DIR/"
   run chown -R "$APP_USER:$APP_USER" "$APP_DIR"
   info "copied checkout to $APP_DIR"
-else
-  info "running from $APP_DIR"
 fi
 
 if (( ! DRY_RUN )); then
