@@ -67,12 +67,12 @@ function extractionName(job: Job): string | null {
   return label.replace(/^INVOICE_/, "");
 }
 
-/** Colour the progress bar by the row's status; the number is the same either way. */
-function progressTone(status: JobStatus): string {
-  if (status === "completed") return "bg-success";
-  if (status === "failed") return "bg-danger";
-  if (status === "paused" || status === "canceled") return "bg-warning";
-  return "bg-primary";
+/** Colour the percentage text by the row's status; no bar, no extra width. */
+function progressTextTone(status: JobStatus): string {
+  if (status === "completed") return "text-success";
+  if (status === "failed") return "text-danger";
+  if (status === "paused" || status === "canceled") return "text-warning";
+  return "text-muted-foreground";
 }
 
 export default function JobsPage() {
@@ -551,7 +551,7 @@ function JobsPageContent() {
                   </th>
                   <th className="whitespace-nowrap px-2 py-1 text-left font-medium">Status</th>
                   <th
-                    className="whitespace-nowrap px-2 py-1 text-left font-medium"
+                    className="whitespace-nowrap px-2 py-1 text-right font-medium"
                     title="Chunks completed out of the total the worker planned"
                   >
                     Progress
@@ -711,26 +711,11 @@ const JobRow = React.memo(function JobRow({
           )}
         </div>
       </td>
-      <td className="px-2 py-0.5">
-        <div className="flex items-center gap-1.5" title={progressTitle}>
-          <div
-            className="h-1.5 w-16 overflow-hidden bg-muted"
-            role="progressbar"
-            aria-label={`Job ${job.id} progress`}
-            aria-valuenow={pct}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuetext={`${pct}%`}
-          >
-            <div
-              className={`h-full transition-all duration-500 ${progressTone(job.status)}`}
-              style={{ width: `${pct}%` }}
-            />
-          </div>
-          <span className="w-9 text-right font-mono text-[11px] tabular-nums text-muted-foreground">
-            {pct}%
-          </span>
-        </div>
+      <td
+        className={`whitespace-nowrap px-2 py-0.5 text-right font-mono text-[11px] tabular-nums ${progressTextTone(job.status)}`}
+        title={progressTitle}
+      >
+        {pct}%
       </td>
       <td
         className="max-w-[22rem] truncate px-2 py-0.5 text-xs"
