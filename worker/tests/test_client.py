@@ -102,7 +102,9 @@ def test_request_uses_custom_header_url_params_and_body():
     params = dict(req.url.params)
     assert params["index"] == "physical_index:UMServices"
     assert params["region"] == "ap-southeast-1"
-    assert params["direction"] == "backward"
+    # Forward so the CSV is oldest-first; backward made each hour land
+    # newest-first and the day appeared to start at 00:59:59.
+    assert params["direction"] == "forward"
     assert params["step"] == "200ms"
     assert params["offset"] == "0"
     body = json.loads(req.content)
