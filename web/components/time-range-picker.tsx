@@ -59,6 +59,8 @@ export function TimeRangePicker({
   onChange: (start: number, end: number, tz: Tz) => void;
 }) {
   const [open, setOpen] = React.useState(false);
+  const [dropUp, setDropUp] = React.useState(false);
+  const triggerRef = React.useRef<HTMLButtonElement>(null);
   const [draftStart, setDraftStart] = React.useState<Ymd | null>(null);
   const [draftEnd, setDraftEnd] = React.useState<Ymd | null>(null);
   const [startTime, setStartTime] = React.useState("00:00");
@@ -103,6 +105,14 @@ export function TimeRangePicker({
 
   const openPicker = () => {
     seed();
+    // The panel is ~690px tall. On a short viewport there may be no room below
+    // the trigger, and a panel that runs off the bottom hides Apply. Open upward
+    // when that is the roomier side; the panel also scrolls internally.
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (rect) {
+      const below = window.innerHeight - rect.bottom;
+      setDropUp(below < 460 && rect.top > below);
+    }
     setOpen(true);
   };
 
@@ -170,6 +180,7 @@ export function TimeRangePicker({
   return (
     <div ref={boxRef} className="relative">
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => (open ? setOpen(false) : openPicker())}
         aria-haspopup="dialog"
@@ -198,7 +209,11 @@ export function TimeRangePicker({
           role="dialog"
           aria-label="Pick a time range"
           tabIndex={-1}
-          className="absolute left-0 top-full z-50 mt-1 w-[620px] max-w-[calc(100vw-2rem)] border border-border bg-surface shadow-card-hover focus:outline-none"
+          className={cn(
+            "absolute left-0 z-50 w-[620px] max-w-[calc(100vw-2rem)] overflow-y-auto border border-border bg-surface shadow-card-hover focus:outline-none",
+            "max-h-[calc(100vh-7rem)]",
+            dropUp ? "bottom-full mb-1" : "top-full mt-1"
+          )}
         >
           <div className="grid grid-cols-1 sm:grid-cols-[168px_1fr]">
             {/* Relative */}
@@ -206,7 +221,7 @@ export function TimeRangePicker({
               <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
                 Relative
               </p>
-              <div className="flex flex-col">
+              <div className="grid grid-cols-2 gap-0.5 sm:grid-cols-1">
                 {PRESETS.map((p) => (
                   <button
                     key={p.label}
