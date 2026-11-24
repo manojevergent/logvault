@@ -13,7 +13,17 @@ set -e
 cd "$(dirname "$0")"
 
 SERVICES="${*:-api worker web}"
-COMPOSE="docker compose -f docker-compose.yml -f docker-compose.prod.yml"
+# The running stack lives in the `last9_web_app` compose project. Be explicit
+# so running the script from another directory does not create a parallel stack.
+PROJECT="${COMPOSE_PROJECT_NAME:-last9_web_app}"
+COMPOSE="docker compose -p $PROJECT -f docker-compose.yml -f docker-compose.prod.yml"
+
+# beat runs the worker image, so rebuilding worker without recreating beat
+# leaves the scheduler on the previous build. Follow worker automatically.
+if echo "$SERVICES" | tr ' ' '\n' | grep -qx worker \
+   && ! echo "$SERVICES" | tr ' ' '\n' | grep -qx beat; then
+  SERVICES="$SERVICES beat"
+fi
 
 # beat runs the worker image, so rebuilding worker without recreating beat
 # leaves the scheduler on the previous build. Follow worker automatically.
