@@ -40,8 +40,11 @@ export default function LogFormatsPage() {
       const text = await file.text();
       const parsed = JSON.parse(text);
       const items: LogFormatInput[] = Array.isArray(parsed) ? parsed : [parsed];
+      const failed: string[] = [];
+      let created = 0;
       for (const item of items) {
-        if (item.name && item.regex) {
+        if (!item?.name || !item?.regex) continue;
+        try {
           await createLogFormat({
             name: item.name,
             regex: item.regex,
@@ -50,10 +53,19 @@ export default function LogFormatsPage() {
             priority: item.priority ?? 100,
             enabled: item.enabled ?? true,
             description: item.description ?? "",
-          }).catch(() => {});
+          });
+          created += 1;
+        } catch (err) {
+          failed.push(`${item.name}: ${(err as Error).message}`);
         }
       }
       invalidate();
+      if (failed.length) {
+        setImportErr(
+          `${created} imported, ${failed.length} failed — ${failed.slice(0, 3).join("; ")}` +
+            (failed.length > 3 ? `; and ${failed.length - 3} more` : "")
+        );
+      }
     } catch (err) {
       setImportErr((err as Error).message);
     } finally {
@@ -96,24 +108,28 @@ export default function LogFormatsPage() {
               <FileDown className="h-4 w-4" /> Export
             </Button>
           )}
-          <label className="inline-flex cursor-pointer items-center">
-            <Button variant="outline" size="sm" type="button" disabled={importing} className="pointer-events-none">
-              {importing ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Upload className="h-4 w-4" />
-              )}
-              Import
-            </Button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".json"
-              className="hidden"
-              onChange={handleImport}
-              disabled={importing}
-            />
-          </label>
+          <Button
+            variant="outline"
+            size="sm"
+            type="button"
+            disabled={importing}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            {importing ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Upload className="h-4 w-4" />
+            )}
+            Import
+          </Button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json"
+            className="hidden"
+            onChange={handleImport}
+            disabled={importing}
+          />
           <Button onClick={() => setAdding((v) => !v)} variant={adding ? "outline" : "primary"}>
             <Plus className="h-4 w-4" />
             {adding ? "Cancel" : "New format"}
