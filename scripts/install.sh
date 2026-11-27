@@ -179,12 +179,16 @@ pkg_present() {
 
 # Start and enable a unit, tolerating the naming differences between distros.
 svc_up() {
-  local unit="$1"
+  local unit="$1" units
   if (( DRY_RUN )); then
     printf '%s  + systemctl enable --now %s%s\n' "$C_DIM" "$unit" "$C_OFF" >&2
     return 0
   fi
-  if systemctl list-unit-files --no-legend 2>/dev/null | awk '{print $1}' | grep -qx "${unit}.service"; then
+  # Capture first, then grep. A `systemctl ... | awk ... | grep -q` pipeline
+  # returns 141 under `set -o pipefail` when grep exits on the first match and
+  # the writers get SIGPIPE, which made a present unit look absent.
+  units="$(systemctl list-unit-files --no-legend 2>/dev/null || true)"
+  if grep -qx "${unit}.service" <<<"$units"; then
     svc enable --now "$unit" >/dev/null 2>&1 || svc start "$unit"
     return 0
   fi
